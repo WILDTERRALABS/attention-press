@@ -1,0 +1,290 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {IArticleRegistry} from "./interfaces/IArticleRegistry.sol";
+
+/// @title AttentionStream
+/// @notice Reader-funded, pay-per-second reading. Each reading session is a
+///         unidirectional payment channel: the reader escrows a capped budget,
+///         then a browser-held session key signs monotonically increasing
+///         `cumulativeAmount` vouchers while the reader is actually on the page.
+///         The author redeems the latest voucher on-chain; the reader is refunded
+///         whatever budget was not streamed.
+///
+/// @dev    Trust model
+///         - No proof-of-personhood / anti-sybil machinery. Because the reader
+///           funds the stream and value flows reader -> author, a publisher who
+///           "reads" their own article via bots only loses the protocol fee and
+///           gas. Fake attention is strictly unprofitable.
+///         - The reader trusts their own client to stop signing vouchers when the
+///           tab loses focus. This is bounded on-chain by `budget` (hard cap) and
+///           `ratePerSec` (accrual cap). Keep default budgets small and session
+///           lengths short in the UI.
+///         - Vouchers must be streamed to the author's collector in real time.
+///           The author calls `settle` to ratchet `claimed` up; the reader can
+///           never `closeSession` below `claimed`. The last un-settled increment
+///           (<= one voucher interval) is the author's risk if the reader closes
+///           first — keep the voucher cadence tight (~5s).
+contract AttentionStream is EIP712, Ownable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
+    /// @dev EIP-712 typehash for a payment voucher.
+    bytes32 private constant VOUCHER_TYPEHASH = keccak256("Voucher(bytes32 sessionId,uint256 cumulativeAmount)");
+
+    uint16 public constant MAX_FEE_BPS = 1_000; // 10%
+    uint64 public constant MIN_TIMEOUT = 1 days;
+    uint64 public constant MAX_TIMEOUT = 30 days;
+    /// @dev Upper bound on how far `ratePerSec` accrual is allowed to run, so a
+    ///      never-closed session cannot be drained at full rate indefinitely.
+    uint64 public constant MAX_ACCRUAL_WINDOW = 7 days;
+
+    IERC20 public immutable token;
+    IArticleRegistry public immutable registry;
+
+    address public treasury;
+    uint16 public protocolFeeBps;
+    /// @notice After this long, the reader may reclaim unclaimed escrow with no voucher.
+    uint64 public sessionTimeout = 3 days;
+
+    struct Session {
+        address reader; // escrow owner + refund recipient
+        address signer; // ephemeral browser key authorized to sign vouchers
+        address author; // payout recipient, cached at open time
+        uint96 budget; // total escrowed; hard cap on cumulativeAmount
+        uint96 claimed; // amount already streamed to the author
+        uint64 articleId;
+        uint64 startTime;
+        uint64 ratePerSec; // max streaming rate; caps voucher accrual
+        bool open;
+    }
+
+    mapping(bytes32 => Session) public sessions;
+    /// @notice Per-reader counter feeding session id derivation.
+    mapping(address => uint256) public openCount;
+
+    // --- Discovery stats (informational; a self-funded reader can inflate these,
+    //     so rank on `articleEarned` / distinct payers off-chain, not raw counts) ---
+    mapping(uint256 => uint256) public articleEarned; // gross streamed to author, pre-fee
+    mapping(uint256 => uint256) public articleReaderSeconds; // sum of closed-session durations
+    mapping(uint256 => uint32) public articleSessions;
+
+    event SessionOpened(
+        bytes32 indexed id,
+        uint256 indexed articleId,
+        address indexed reader,
+        address author,
+        address signer,
+        uint96 budget,
+        uint64 ratePerSec
+    );
+    event Settled(bytes32 indexed id, uint256 indexed articleId, uint96 cumulativeAmount, uint96 delta, uint96 fee);
+    event SessionClosed(
+        bytes32 indexed id, uint256 indexed articleId, uint96 totalPaid, uint96 refunded, uint64 duration
+    );
+    event TreasuryUpdated(address treasury);
+    event ProtocolFeeUpdated(uint16 bps);
+    event SessionTimeoutUpdated(uint64 timeout);
+
+    error ArticleInactive();
+    error BadParams();
+    error NotReader();
+    error SessionNotOpen();
+    error NonMonotonic();
+    error OverBudget();
+    error RateExceeded();
+    error BadSignature();
+    error TooEarly();
+
+    constructor(IERC20 _token, IArticleRegistry _registry, address _treasury, uint16 _feeBps)
+        EIP712("AttentionStream", "1")
+        Ownable(msg.sender)
+    {
+        if (address(_token) == address(0) || address(_registry) == address(0) || _treasury == address(0)) {
+            revert BadParams();
+        }
+        if (_feeBps > MAX_FEE_BPS) revert BadParams();
+        token = _token;
+        registry = _registry;
+        treasury = _treasury;
+        protocolFeeBps = _feeBps;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Reader / author flow
+    // ---------------------------------------------------------------------------
+
+    /// @notice Open a reading session and escrow `budget` of the payment token.
+    /// @param articleId  target article; must be active in the registry.
+    /// @param budget     hard cap the reader can spend this session.
+    /// @param ratePerSec advertised streaming rate; also the on-chain accrual cap.
+    /// @param signer     ephemeral key (generated in the reader's browser) that
+    ///                   will sign vouchers. Compromise is bounded by budget+rate.
+    function openSession(uint64 articleId, uint96 budget, uint64 ratePerSec, address signer)
+        external
+        nonReentrant
+        returns (bytes32 id)
+    {
+        if (!registry.isActive(articleId)) revert ArticleInactive();
+        if (budget == 0 || ratePerSec == 0 || signer == address(0)) revert BadParams();
+
+        address author = registry.authorOf(articleId);
+
+        id = keccak256(abi.encode(msg.sender, openCount[msg.sender]++, block.chainid, articleId, address(this)));
+        if (sessions[id].reader != address(0)) revert BadParams(); // unreachable in practice
+
+        sessions[id] = Session({
+            reader: msg.sender,
+            signer: signer,
+            author: author,
+            budget: budget,
+            claimed: 0,
+            articleId: articleId,
+            startTime: uint64(block.timestamp),
+            ratePerSec: ratePerSec,
+            open: true
+        });
+
+        unchecked {
+            articleSessions[articleId] += 1;
+        }
+
+        token.safeTransferFrom(msg.sender, address(this), budget);
+        emit SessionOpened(id, articleId, msg.sender, author, signer, budget, ratePerSec);
+    }
+
+    /// @notice Ratchet the amount streamed to the author up to `cumulativeAmount`.
+    /// @dev Permissionless: normally called by the author's collector service.
+    function settle(bytes32 id, uint96 cumulativeAmount, bytes calldata sig) external nonReentrant {
+        Session storage s = sessions[id];
+        if (!s.open) revert SessionNotOpen();
+        _verify(id, s.signer, cumulativeAmount, sig);
+        _applySettlement(id, s, cumulativeAmount);
+    }
+
+    /// @notice Reader ends the session: settle the final voucher (if any) and
+    ///         refund the unspent budget.
+    /// @param cumulativeAmount pass the latest voucher value, or the current
+    ///        `claimed` with empty `sig` to settle nothing.
+    function closeSession(bytes32 id, uint96 cumulativeAmount, bytes calldata sig) external nonReentrant {
+        Session storage s = sessions[id];
+        if (!s.open) revert SessionNotOpen();
+        if (msg.sender != s.reader) revert NotReader();
+
+        if (cumulativeAmount != s.claimed) {
+            _verify(id, s.signer, cumulativeAmount, sig);
+            _applySettlement(id, s, cumulativeAmount);
+        }
+        _finalize(id, s);
+    }
+
+    /// @notice Safety hatch: once `sessionTimeout` has passed the reader recovers
+    ///         all unclaimed escrow without needing a voucher. The author had the
+    ///         full window to `settle` any vouchers they held.
+    function readerReclaim(bytes32 id) external nonReentrant {
+        Session storage s = sessions[id];
+        if (!s.open) revert SessionNotOpen();
+        if (msg.sender != s.reader) revert NotReader();
+        if (block.timestamp < uint256(s.startTime) + sessionTimeout) revert TooEarly();
+        _finalize(id, s);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Internals
+    // ---------------------------------------------------------------------------
+
+    function _verify(bytes32 id, address signer, uint256 cumulativeAmount, bytes calldata sig) internal view {
+        bytes32 digest = _hashTypedDataV4(keccak256(abi.encode(VOUCHER_TYPEHASH, id, cumulativeAmount)));
+        if (ECDSA.recover(digest, sig) != signer) revert BadSignature();
+    }
+
+    /// @dev Largest `cumulativeAmount` permitted by the rate cap at the current time.
+    function _maxAccrued(Session storage s) internal view returns (uint256) {
+        uint256 endCap = uint256(s.startTime) + MAX_ACCRUAL_WINDOW;
+        uint256 nowTs = block.timestamp < endCap ? block.timestamp : endCap;
+        uint256 elapsed = nowTs - s.startTime;
+        // +1s slack absorbs clock skew between the signer and the chain.
+        return uint256(s.ratePerSec) * (elapsed + 1);
+    }
+
+    function _applySettlement(bytes32 id, Session storage s, uint96 cumulativeAmount) internal {
+        if (cumulativeAmount < s.claimed) revert NonMonotonic();
+        if (cumulativeAmount > s.budget) revert OverBudget();
+        if (cumulativeAmount > _maxAccrued(s)) revert RateExceeded();
+
+        uint96 delta = cumulativeAmount - s.claimed;
+        s.claimed = cumulativeAmount; // effects before interactions
+
+        uint96 fee = uint96((uint256(delta) * protocolFeeBps) / 10_000);
+        unchecked {
+            articleEarned[s.articleId] += delta;
+        }
+
+        if (delta > 0) {
+            if (fee > 0) token.safeTransfer(treasury, fee);
+            token.safeTransfer(s.author, delta - fee);
+        }
+        emit Settled(id, s.articleId, cumulativeAmount, delta, fee);
+    }
+
+    function _finalize(bytes32 id, Session storage s) internal {
+        s.open = false; // effects before interactions
+        uint96 refund = s.budget - s.claimed;
+        uint64 duration = uint64(block.timestamp) - s.startTime;
+
+        unchecked {
+            articleReaderSeconds[s.articleId] += duration;
+        }
+
+        if (refund > 0) token.safeTransfer(s.reader, refund);
+        emit SessionClosed(id, s.articleId, s.claimed, refund, duration);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Admin
+    // ---------------------------------------------------------------------------
+
+    function setTreasury(address t) external onlyOwner {
+        if (t == address(0)) revert BadParams();
+        treasury = t;
+        emit TreasuryUpdated(t);
+    }
+
+    function setProtocolFeeBps(uint16 bps) external onlyOwner {
+        if (bps > MAX_FEE_BPS) revert BadParams();
+        protocolFeeBps = bps;
+        emit ProtocolFeeUpdated(bps);
+    }
+
+    function setSessionTimeout(uint64 t) external onlyOwner {
+        if (t < MIN_TIMEOUT || t > MAX_TIMEOUT) revert BadParams();
+        sessionTimeout = t;
+        emit SessionTimeoutUpdated(t);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Views
+    // ---------------------------------------------------------------------------
+
+    /// @notice EIP-712 domain separator, exposed for client-side voucher signing.
+    function domainSeparator() external view returns (bytes32) {
+        return _domainSeparatorV4();
+    }
+
+    /// @notice Amount currently claimable by the author for `id` given a voucher value.
+    function claimableFor(bytes32 id, uint96 cumulativeAmount) external view returns (uint96) {
+        Session storage s = sessions[id];
+        if (!s.open || cumulativeAmount <= s.claimed) return 0;
+        uint256 capped = cumulativeAmount;
+        if (capped > s.budget) capped = s.budget;
+        uint256 rateCap = _maxAccrued(s);
+        if (capped > rateCap) capped = rateCap;
+        if (capped <= s.claimed) return 0;
+        return uint96(capped - s.claimed);
+    }
+}
