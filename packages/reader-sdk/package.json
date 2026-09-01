@@ -1,0 +1,38 @@
+{
+  "name": "@attention-press/reader-sdk",
+  "version": "0.1.0",
+  "description": "Client-side reading-engagement tracking and EIP-712 voucher signing for attention-press",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "viem": "^2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "happy-dom": "^15.11.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.5.4",
+    "viem": "^2.21.0",
+    "vitest": "^2.1.0"
+  }
+}

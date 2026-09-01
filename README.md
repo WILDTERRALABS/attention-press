@@ -6,8 +6,16 @@ Anyone can publish an article. Readers stream a micro-payment to the author for
 every second they actually spend reading. Engaging pieces hold attention longer
 and earn more — quality compounds, volume does not.
 
-**Status:** smart-contract core + full test suite. No frontend/SDK yet (see
-[Roadmap](#roadmap)).
+**Status:** smart-contract core + reader SDK, both with full test suites
+(`@attention-press/contracts` 12 passing, `@attention-press/reader-sdk` 26
+passing). No collector service or frontend yet (see [Roadmap](#roadmap)).
+
+## Packages
+
+| Package | What |
+|---|---|
+| [`packages/contracts`](packages/contracts) | `ArticleRegistry` + `AttentionStream` (Hardhat, Solidity 0.8.24) |
+| [`packages/reader-sdk`](packages/reader-sdk) | `AttentionMeter` — client-side engagement tracking + EIP-712 voucher signing (TypeScript, viem) |
 
 ---
 
@@ -123,57 +131,51 @@ the fee to do it).
 
 ---
 
-## Client-side voucher signing (reference)
+## Client-side integration
+
+Use [`@attention-press/reader-sdk`](packages/reader-sdk) — its `AttentionMeter`
+opens the session, tracks engagement (focus / scroll / idle / `visibilitychange`),
+signs a voucher every ~5s with an in-memory ephemeral key, and closes the session
+on `stop()`.
 
 ```ts
-import { Wallet, JsonRpcProvider, Contract } from "ethers";
+import { AttentionMeter } from "@attention-press/reader-sdk";
 
-// 1. One-time per session: create an ephemeral key, keep it in memory only.
-const sessionKey = Wallet.createRandom();
-
-// 2. openSession(articleId, budget, ratePerSec, sessionKey.address) via the reader's wallet.
-//    Read `sessionId` from the SessionOpened event.
-
-// 3. While the tab is focused AND the reader is scrolling/progressing, tick every ~5s:
-const domain = {
-  name: "AttentionStream",
-  version: "1",
-  chainId,
-  verifyingContract: streamAddress,
-};
-const types = {
-  Voucher: [
-    { name: "sessionId", type: "bytes32" },
-    { name: "cumulativeAmount", type: "uint256" },
-  ],
-};
-
-let cumulative = 0n;
-function tick(secondsElapsedSinceLastTick: bigint) {
-  cumulative += ratePerSec * secondsElapsedSinceLastTick; // clamp to budget
-  return sessionKey.signTypedData(domain, types, { sessionId, cumulativeAmount: cumulative });
-}
-// POST each signed voucher to the author's collector. On unload / "done reading",
-// call closeSession(sessionId, cumulative, latestSig) from the reader's wallet.
+const meter = new AttentionMeter({
+  contractAddress, chainId: 10143, articleId, ratePerSec, budget,
+  provider: window.ethereum,
+  target: document.querySelector("article") ?? undefined,
+  onVoucher: (v) => fetch("/api/vouchers", { method: "POST", body: JSON.stringify(v) }),
+});
+meter.on("voucher:signed", ({ cumulativeAmount }) => updateSpendMeter(cumulativeAmount));
+await meter.start();
+// … reader reads …
+await meter.stop();
 ```
-
-Pause the ticker on `visibilitychange`, prolonged idle, or when scroll progress
-stalls — that is how "engagement" maps to payment.
 
 ---
 
 ## Getting started
 
 ```bash
-npm install
-npm run build      # hardhat compile  (solc 0.8.24, evm target: paris)
-npm test           # 12 passing
+npm install                     # workspace root — installs both packages
+npm test                        # contracts (12) + reader-sdk (26)
+npm run build                   # hardhat compile + tsup
+```
+
+Per package:
+
+```bash
+npm test  -w @attention-press/contracts
+npm test  -w @attention-press/reader-sdk
+npm run build -w @attention-press/reader-sdk
 ```
 
 Deploy to Monad testnet:
 
 ```bash
-cp .env.example .env    # set DEPLOYER_KEY, verify MONAD_RPC_URL / chainId
+cd packages/contracts
+cp .env.example .env             # set DEPLOYER_KEY, verify MONAD_RPC_URL / chainId
 npm run deploy:monad
 ```
 
@@ -181,28 +183,37 @@ The deploy script publishes `ArticleRegistry`, a `MockERC20` (unless
 `PAYMENT_TOKEN` is set), and `AttentionStream` with the deployer as treasury.
 
 > Verify the current Monad testnet RPC URL and chain id before deploying — the
-> values in `hardhat.config.ts` (chainId `10143`, `https://testnet-rpc.monad.xyz`)
-> are placeholders to confirm.
+> values in `packages/contracts/hardhat.config.ts` (chainId `10143`,
+> `https://testnet-rpc.monad.xyz`) are placeholders to confirm.
 
 ---
 
 ## Layout
 
 ```
-contracts/
-  ArticleRegistry.sol          registry of published articles
-  AttentionStream.sol          per-session payment channel + fees + timeouts
-  interfaces/IArticleRegistry.sol
-  mocks/MockERC20.sol          test/testnet payment token
-scripts/deploy.ts
-test/attention.test.ts         registry, voucher settlement, caps, timeout, self-farm
+packages/
+  contracts/
+    contracts/
+      ArticleRegistry.sol        registry of published articles
+      AttentionStream.sol        per-session payment channel + fees + timeouts
+      interfaces/IArticleRegistry.sol
+      mocks/MockERC20.sol        test/testnet payment token
+    scripts/deploy.ts
+    test/attention.test.ts       registry, voucher settlement, caps, timeout, self-farm
+  reader-sdk/
+    src/
+      AttentionMeter.ts          orchestrator + typed events
+      engagement/                visibility + focus + idle + scroll tracking
+      session/                   ephemeral key, EIP-712 voucher, accrual math
+      chain/                     openSession / closeSession via EIP-1193
+    test/                        voucher digest, accrual clamps, engagement, lifecycle
 ```
 
 ---
 
 ## Roadmap
 
-1. **Reader SDK** — focus/scroll/idle tracking, voucher signing, session lifecycle, `visibilitychange` pause.
+1. ~~**Reader SDK**~~ — done: `@attention-press/reader-sdk`.
 2. **Author collector service** — receives vouchers, auto-`settle`s on an interval, exposes earnings.
 3. **Next.js frontend** — publish flow (upload to IPFS → `publish`), reader view with a live spend meter, discovery ranked by real spend.
 4. **Indexer/subgraph** — leaderboards, per-article retention curves ("engagement", not just clicks).

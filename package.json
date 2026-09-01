@@ -3,17 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "description": "Reader-funded pay-per-second publishing on Monad",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "build": "hardhat compile",
-    "test": "hardhat test",
-    "deploy:monad": "hardhat run scripts/deploy.ts --network monadTestnet"
-  },
-  "devDependencies": {
-    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
-    "@openzeppelin/contracts": "5.1.0",
-    "@types/node": "^20.14.0",
-    "hardhat": "^2.22.10",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.5.4"
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:contracts": "npm test -w @attention-press/contracts",
+    "test:sdk": "npm test -w @attention-press/reader-sdk"
   }
 }
