@@ -1,8 +1,9 @@
 import { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox";
+import "dotenv/config"; // loads packages/contracts/.env
 
-// NOTE: verify the current Monad testnet RPC URL and chain id before deploying.
-// As of writing: chainId 10143, RPC https://testnet-rpc.monad.xyz
+// Monad testnet verified live 2026-09-01: eth_chainId -> 0x279f (10143),
+// RPC https://testnet-rpc.monad.xyz producing blocks.
 const MONAD_RPC_URL = process.env.MONAD_RPC_URL ?? "https://testnet-rpc.monad.xyz";
 const DEPLOYER_KEY = process.env.DEPLOYER_KEY;
 
