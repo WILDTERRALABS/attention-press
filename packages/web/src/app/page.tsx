@@ -6,7 +6,7 @@ import { ArticleCard } from "@/components/ArticleCard";
 import { AuthorCard } from "@/components/AuthorCard";
 import { useArticles } from "@/lib/articles";
 import { useAuthors } from "@/lib/authors";
-import { ATTENTION_STREAM, COLLECTOR_URL, attentionStreamAbi, erc20Abi } from "@/lib/chain";
+import { ATTENTION_STREAM, COLLECTOR_URL, PINNED_ARTICLE_ID, attentionStreamAbi, erc20Abi } from "@/lib/chain";
 
 const TOP_AUTHORS = 15;
 
@@ -21,7 +21,13 @@ export default function HomePage() {
   const tokenSymbol = symbol.data ?? "tokens";
   const tokenDecimals = decimals.data ?? 18;
 
-  const visible = articles.filter((a) => !a.retired);
+  const visible = useMemo(() => {
+    const live = articles.filter((a) => !a.retired);
+    if (PINNED_ARTICLE_ID === null) return live;
+    const i = live.findIndex((a) => a.id === PINNED_ARTICLE_ID);
+    if (i <= 0) return live;
+    return [live[i]!, ...live.slice(0, i), ...live.slice(i + 1)];
+  }, [articles]);
   const topAuthors = useMemo(() => authors.slice(0, TOP_AUTHORS), [authors]);
 
   const [bios, setBios] = useState<Record<string, string>>({});
@@ -72,7 +78,13 @@ export default function HomePage() {
           )}
           <div className="grid">
             {visible.map((a) => (
-              <ArticleCard key={a.id.toString()} a={a} tokenSymbol={tokenSymbol} tokenDecimals={tokenDecimals} />
+              <ArticleCard
+                key={a.id.toString()}
+                a={a}
+                pinned={a.id === PINNED_ARTICLE_ID}
+                tokenSymbol={tokenSymbol}
+                tokenDecimals={tokenDecimals}
+              />
             ))}
           </div>
         </>

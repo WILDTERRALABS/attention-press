@@ -4,7 +4,17 @@ import { formatSeconds, formatUnits, shortAddress } from "@/lib/format";
 import { previewText } from "@/lib/metadata";
 import { tierByPerMinute } from "@/lib/rate";
 
-export function ArticleCard({ a, tokenSymbol, tokenDecimals }: { a: ArticleView; tokenSymbol: string; tokenDecimals: number }) {
+export function ArticleCard({
+  a,
+  tokenSymbol,
+  tokenDecimals,
+  pinned = false,
+}: {
+  a: ArticleView;
+  tokenSymbol: string;
+  tokenDecimals: number;
+  pinned?: boolean;
+}) {
   const title = a.metadata?.title ?? `Article #${a.id}`;
   const preview = a.metadata
     ? previewText(a.metadata).slice(0, 180) || "🔒 Locked — open to read"
@@ -13,9 +23,9 @@ export function ArticleCard({ a, tokenSymbol, tokenDecimals }: { a: ArticleView;
   const tier = tierByPerMinute(a.metadata?.ratePerMinute);
 
   return (
-    <div className="card">
+    <div className={`card${pinned ? " card-pinned" : ""}`}>
       <Link href={`/article/${a.id}`}>
-        <h3>{title}</h3>
+        <h3>{pinned && <span className="pin-badge">📌 Start here</span>}{title}</h3>
         <p className="preview">{preview}</p>
       </Link>
       <div className="card-meta">

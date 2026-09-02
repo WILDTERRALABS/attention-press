@@ -6,6 +6,7 @@ import { marked } from "marked";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAccount, useBalance, usePublicClient, useReadContract, useSignMessage, useWriteContract } from "wagmi";
 import { AttentionMeter, type Eip1193Provider } from "@attention-press/reader-sdk";
+import { ArticleActions } from "@/components/ArticleActions";
 import { SpendMeter, type MeterSnapshot } from "@/components/SpendMeter";
 import { ATTENTION_STREAM, CHAIN_ID, COLLECTOR_URL, erc20Abi, monadTestnet } from "@/lib/chain";
 import { decryptBody } from "@/lib/crypto";
@@ -309,6 +310,13 @@ export function ReaderClient({
           </div>
         )}
       </div>
+
+      <ArticleActions
+        articleId={articleId}
+        author={author}
+        tokenSymbol={tokenSymbol}
+        tokenDecimals={tokenDecimals}
+      />
     </article>
   );
 }

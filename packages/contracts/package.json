@@ -10,7 +10,9 @@
     "slither": "slither .",
     "preflight:monad": "hardhat run scripts/whoami.ts --network monadTestnet",
     "deploy:monad": "hardhat run scripts/deploy.ts --network monadTestnet",
-    "deploy-actions:monad": "hardhat run scripts/deploy-actions.ts --network monadTestnet"
+    "deploy-actions:monad": "hardhat run scripts/deploy-actions.ts --network monadTestnet",
+    "list-articles:monad": "hardhat run scripts/list-articles.ts --network monadTestnet",
+    "retire:monad": "hardhat run scripts/retire-articles.ts --network monadTestnet"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",

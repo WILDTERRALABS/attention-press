@@ -9,6 +9,38 @@ export const ARTICLE_REGISTRY = (process.env.NEXT_PUBLIC_ARTICLE_REGISTRY ??
 export const ATTENTION_STREAM = (process.env.NEXT_PUBLIC_ATTENTION_STREAM ??
   "0xca364C7eC309c293216B43f6C069Ee9c5b6959cc") as Address;
 
+/**
+ * ArticleActions (like / dislike / favorite / reply / tip). Deployed separately
+ * via `scripts/deploy-actions.ts`; set NEXT_PUBLIC_ARTICLE_ACTIONS after that.
+ * Empty string => the actions bar renders a "not configured" note and no calls.
+ */
+export const ARTICLE_ACTIONS = (process.env.NEXT_PUBLIC_ARTICLE_ACTIONS ?? "") as Address | "";
+
+/** Fixed action prices, mirrored from ArticleActions.sol (base units, 18 dp). */
+export const ACTION_PRICES = {
+  like: 1_000000000000000000n,
+  dislike: 1_000000000000000000n,
+  favorite: 1_000000000000000000n,
+  reply: 2_000000000000000000n,
+} as const;
+
+/** Mirror of ArticleActions.MAX_REPLY_BYTES. */
+export const MAX_REPLY_BYTES = 1_000;
+
+/**
+ * Article floated to the top of discovery regardless of earnings (the project
+ * explainer). Override with NEXT_PUBLIC_PINNED_ARTICLE_ID; 0 / unset => none.
+ */
+export const PINNED_ARTICLE_ID = (() => {
+  const raw = process.env.NEXT_PUBLIC_PINNED_ARTICLE_ID ?? "8";
+  try {
+    const v = BigInt(raw);
+    return v > 0n ? v : null;
+  } catch {
+    return null;
+  }
+})();
+
 /** Canonical Wrapped MON (WMON) on Monad testnet — the payment token. */
 export const WMON = "0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541" as Address;
 
@@ -114,6 +146,75 @@ export const attentionStreamAbi = [
   },
 ] as const;
 
+export const articleActionsAbi = [
+  ...(["likeCount", "dislikeCount", "favoriteCount", "replyCount", "totalTipped"] as const).map(
+    (name) =>
+      ({
+        type: "function",
+        name,
+        stateMutability: "view",
+        inputs: [{ name: "articleId", type: "uint256" }],
+        outputs: [{ type: "uint256" }],
+      }) as const,
+  ),
+  ...(["hasLiked", "hasDisliked", "hasFavorited"] as const).map(
+    (name) =>
+      ({
+        type: "function",
+        name,
+        stateMutability: "view",
+        inputs: [
+          { name: "articleId", type: "uint256" },
+          { name: "actor", type: "address" },
+        ],
+        outputs: [{ type: "bool" }],
+      }) as const,
+  ),
+  { type: "function", name: "actionFeeBps", stateMutability: "view", inputs: [], outputs: [{ type: "uint16" }] },
+  ...(["like", "dislike", "favorite"] as const).map(
+    (name) =>
+      ({
+        type: "function",
+        name,
+        stateMutability: "nonpayable",
+        inputs: [{ name: "articleId", type: "uint256" }],
+        outputs: [],
+      }) as const,
+  ),
+  {
+    type: "function",
+    name: "reply",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "articleId", type: "uint256" },
+      { name: "text", type: "string" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "tip",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "articleId", type: "uint256" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "event",
+    name: "Replied",
+    inputs: [
+      { name: "articleId", type: "uint256", indexed: true },
+      { name: "actor", type: "address", indexed: true },
+      { name: "index", type: "uint256", indexed: true },
+      { name: "toAuthor", type: "uint256", indexed: false },
+      { name: "fee", type: "uint256", indexed: false },
+      { name: "text", type: "string", indexed: false },
+    ],
+  },
+] as const;
+
 export const erc20Abi = [
   {
     type: "function",
@@ -145,6 +246,16 @@ export const erc20Abi = [
       { name: "spender", type: "address" },
     ],
     outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "approve",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ type: "bool" }],
   },
   // WETH9-style: wrap native MON 1:1 into WMON / unwrap back.
   { type: "function", name: "deposit", stateMutability: "payable", inputs: [], outputs: [] },
