@@ -1,14 +1,14 @@
 {
   "network": "monadTestnet",
   "chainId": 10143,
-  "deployedAt": "2026-09-01T23:43:31.757Z",
+  "deployedAt": "2026-09-02T02:10:11.893Z",
   "deployer": "0x67dEf124555dDAABb406D4c79e65218F952f3668",
   "contracts": {
     "ArticleRegistry": "0x34C48D04c566131aEa6DBA8E2727423A55e38aaa",
-    "AttentionStream": "0xcf3B5EB6dF13Fd6a7D2df26E57549653bB700a9F",
-    "paymentToken": "0xa56C8fAa99bC40052179e72F81eF12891167599A"
+    "AttentionStream": "0xca364C7eC309c293216B43f6C069Ee9c5b6959cc",
+    "paymentToken": "0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541"
   },
-  "paymentTokenIsMock": true,
+  "paymentTokenIsMock": false,
   "protocolFeeBps": 250,
   "treasury": "0x67dEf124555dDAABb406D4c79e65218F952f3668"
 }

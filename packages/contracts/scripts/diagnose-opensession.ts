@@ -80,7 +80,7 @@ async function main() {
     console.log(`  MON balance:      ${ethers.formatEther(await ethers.provider.getBalance(process.env.ADDR))}`);
     if (bal === 0n) console.log(`  >>> zero ${sym}: openSession's token.safeTransferFrom(reader, ...) will REVERT`);
   } else {
-    console.log(`\n(pass ADDR=0xReader to check that wallet's ${"mUSD"} balance/allowance)`);
+    console.log(`\n(pass ADDR=0xReader to check that wallet's payment-token balance/allowance)`);
   }
 }
 

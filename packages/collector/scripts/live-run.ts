@@ -45,7 +45,8 @@ const REGISTRY = deployments.contracts.ArticleRegistry;
 const TOKEN = deployments.contracts.paymentToken;
 
 const abi = [
-  { type: "function", name: "mint", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [] },
+  { type: "function", name: "deposit", stateMutability: "payable", inputs: [], outputs: [] }, // WMON wrap
+  { type: "function", name: "transfer", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] },
   { type: "function", name: "approve", stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] },
   { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "a", type: "address" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "publish", stateMutability: "nonpayable", inputs: [{ name: "contentHash", type: "bytes32" }, { name: "uri", type: "string" }], outputs: [{ name: "id", type: "uint256" }] },
@@ -126,6 +127,21 @@ async function waitForClaimed(sessionId: Hex, target: bigint, timeoutMs: number)
   throw new Error(`timed out waiting for on-chain claimed >= ${target}`);
 }
 
+async function tokenBalance(who: Address): Promise<bigint> {
+  return (await pub.readContract({ address: TOKEN, abi, functionName: "balanceOf", args: [who] })) as bigint;
+}
+
+// Monad testnet executes state effects a little after a tx's receipt lands, so
+// poll for balances to appear before a dependent transaction reads them.
+async function waitForBalance(who: Address, target: bigint, label: string, timeoutMs = 60_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await tokenBalance(who)) >= target) return;
+    await sleep(2000);
+  }
+  throw new Error(`timed out waiting for ${label} balance >= ${target}`);
+}
+
 function eventArg(logs: readonly { address: Address; data: Hex; topics: readonly Hex[] }[], addr: Address, name: string, key: string) {
   for (const lg of logs) {
     if (lg.address.toLowerCase() !== addr.toLowerCase()) continue;
@@ -149,13 +165,21 @@ async function main() {
   console.log(`\nGET /health -> ${health.status} ${j(health.body)}`);
   if (health.status !== 200) throw new Error("collector /health not OK — is it running?");
 
-  console.log(`\nfunding reader 0.3 MON + minting ${BUDGET * 3n} mUSD ...`);
+  // Operator wraps MON -> WMON and sends it to the reader (keeps funding txs on
+  // the settled operator account); reader just gets MON for gas.
+  const wrap = BUDGET * 2n;
+  console.log(`\nfunding reader 0.3 MON gas + ${wrap} WMON (operator-wrapped) ...`);
   await pub.waitForTransactionReceipt({
     hash: await operatorWallet.sendTransaction({ to: reader.address, value: parseEther("0.3"), chain: null }),
   });
   await pub.waitForTransactionReceipt({
-    hash: await operatorWallet.writeContract({ address: TOKEN, abi, functionName: "mint", args: [reader.address, BUDGET * 3n], chain: null }),
+    hash: await operatorWallet.writeContract({ address: TOKEN, abi, functionName: "deposit", value: wrap, chain: null }),
   });
+  await waitForBalance(operator.address, wrap, "operator WMON");
+  await pub.waitForTransactionReceipt({
+    hash: await operatorWallet.writeContract({ address: TOKEN, abi, functionName: "transfer", args: [reader.address, wrap], chain: null }),
+  });
+  await waitForBalance(reader.address, wrap, "reader WMON");
 
   const contentHash = keccak256(toHex(`live-run ${Date.now()}`));
   const pubRc = await pub.waitForTransactionReceipt({

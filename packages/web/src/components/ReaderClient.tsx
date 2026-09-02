@@ -3,7 +3,7 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
+import { useAccount, useBalance, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { AttentionMeter, type Eip1193Provider } from "@attention-press/reader-sdk";
 import { SpendMeter, type MeterSnapshot } from "@/components/SpendMeter";
 import {
@@ -12,7 +12,6 @@ import {
   COLLECTOR_URL,
   DEFAULT_BUDGET,
   DEFAULT_RATE_PER_SEC,
-  FAUCET_MINT_AMOUNT,
   erc20Abi,
   monadTestnet,
 } from "@/lib/chain";
@@ -144,38 +143,44 @@ export function ReaderClient({
     };
   }, []);
 
-  // --- payment-token balance + in-app testnet faucet ---
-  const balance = useReadContract({
+  // --- WMON balance + native MON, with a "wrap" helper ---
+  const wmon = useReadContract({
     address: tokenAddress,
     abi: erc20Abi,
     functionName: "balanceOf",
     args: address ? [address] : undefined,
     query: { enabled: !!tokenAddress && !!address },
   });
-  const { writeContractAsync: mintAsync } = useWriteContract();
-  const [minting, setMinting] = useState(false);
+  const mon = useBalance({ address, query: { enabled: !!address } });
+  const { writeContractAsync } = useWriteContract();
+  const [wrapping, setWrapping] = useState(false);
 
-  const bal = balance.data ?? 0n;
-  const enoughBalance = bal >= DEFAULT_BUDGET;
+  const wmonBal = wmon.data ?? 0n;
+  const monBal = mon.data?.value ?? 0n;
+  const enoughBalance = wmonBal >= DEFAULT_BUDGET;
+  const shortfall = DEFAULT_BUDGET > wmonBal ? DEFAULT_BUDGET - wmonBal : 0n;
+  // wrap the shortfall + a little headroom, if there's native MON to cover it
+  const wrapAmount = shortfall + shortfall / 10n;
+  const canWrap = monBal > wrapAmount;
 
-  const mint = useCallback(async () => {
-    if (!tokenAddress || !address) return;
-    setMinting(true);
+  const wrap = useCallback(async () => {
+    if (!tokenAddress || !address || wrapAmount === 0n) return;
+    setWrapping(true);
     try {
-      const hash = await mintAsync({
+      const hash = await writeContractAsync({
         address: tokenAddress,
         abi: erc20Abi,
-        functionName: "mint",
-        args: [address, FAUCET_MINT_AMOUNT],
+        functionName: "deposit",
+        value: wrapAmount,
       });
       await publicClient?.waitForTransactionReceipt({ hash });
-      await balance.refetch();
+      await Promise.all([wmon.refetch(), mon.refetch()]);
     } catch (err) {
       patch({ error: err instanceof Error ? err.message : String(err) });
     } finally {
-      setMinting(false);
+      setWrapping(false);
     }
-  }, [tokenAddress, address, mintAsync, publicClient, balance, patch]);
+  }, [tokenAddress, address, wrapAmount, writeContractAsync, publicClient, wmon, mon, patch]);
 
   const onChain = isConnected && chainId === CHAIN_ID;
   const canStart = onChain && enoughBalance;
@@ -194,7 +199,8 @@ export function ReaderClient({
       {onChain && (
         <p className="notice" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <span>
-            Balance: <b>{formatUnits(bal, tokenDecimals)} {tokenSymbol}</b>
+            <b>{formatUnits(wmonBal, tokenDecimals)} {tokenSymbol}</b> +{" "}
+            <b>{formatUnits(monBal, 18)} MON</b> native
             {!enoughBalance && (
               <>
                 {" "}
@@ -202,11 +208,14 @@ export function ReaderClient({
               </>
             )}
           </span>
-          {!enoughBalance && (
-            <button className="btn" disabled={minting || !tokenAddress} onClick={mint}>
-              {minting ? "Minting…" : `Get ${formatUnits(FAUCET_MINT_AMOUNT, tokenDecimals)} test ${tokenSymbol}`}
-            </button>
-          )}
+          {!enoughBalance &&
+            (canWrap ? (
+              <button className="btn" disabled={wrapping || !tokenAddress} onClick={wrap}>
+                {wrapping ? "Wrapping…" : `Wrap ${formatUnits(wrapAmount, 18)} MON → ${tokenSymbol}`}
+              </button>
+            ) : (
+              <span className="muted">not enough native MON to wrap — use the Monad faucet</span>
+            ))}
         </p>
       )}
 

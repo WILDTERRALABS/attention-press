@@ -7,7 +7,10 @@ export const COLLECTOR_URL = process.env.NEXT_PUBLIC_COLLECTOR_URL ?? "http://lo
 export const ARTICLE_REGISTRY = (process.env.NEXT_PUBLIC_ARTICLE_REGISTRY ??
   "0x34C48D04c566131aEa6DBA8E2727423A55e38aaa") as Address;
 export const ATTENTION_STREAM = (process.env.NEXT_PUBLIC_ATTENTION_STREAM ??
-  "0xcf3B5EB6dF13Fd6a7D2df26E57549653bB700a9F") as Address;
+  "0xca364C7eC309c293216B43f6C069Ee9c5b6959cc") as Address;
+
+/** Canonical Wrapped MON (WMON) on Monad testnet — the payment token. */
+export const WMON = "0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541" as Address;
 
 export const DEFAULT_RATE_PER_SEC = BigInt(
   process.env.NEXT_PUBLIC_DEFAULT_RATE_PER_SEC ?? "1000000000000000",
@@ -123,18 +126,13 @@ export const erc20Abi = [
     ],
     outputs: [{ type: "uint256" }],
   },
-  // MockERC20 only — permissionless testnet faucet.
+  // WETH9-style: wrap native MON 1:1 into WMON / unwrap back.
+  { type: "function", name: "deposit", stateMutability: "payable", inputs: [], outputs: [] },
   {
     type: "function",
-    name: "mint",
+    name: "withdraw",
     stateMutability: "nonpayable",
-    inputs: [
-      { name: "to", type: "address" },
-      { name: "amount", type: "uint256" },
-    ],
+    inputs: [{ name: "amount", type: "uint256" }],
     outputs: [],
   },
 ] as const;
-
-/** Amount minted per click of the in-app test-token faucet (10 tokens @ 18 decimals). */
-export const FAUCET_MINT_AMOUNT = 10n * 10n ** 18n;

@@ -4,25 +4,31 @@ import { ethers, network } from "hardhat";
 
 /**
  * Full-loop smoke test against a live deployment:
- *   mint -> publish -> openSession -> sign voucher -> settle -> closeSession
+ *   fund token -> publish -> openSession -> sign voucher -> settle -> closeSession
  *
  * The deployer acts as author + treasury. A fresh throwaway wallet acts as the
- * reader (funded with a little MON for gas + MockERC20 for the stream), so the
- * reader<->author value flow is exercised across distinct addresses.
+ * reader, funded with MON for gas plus payment tokens for the stream (WMON via
+ * deposit(), or MockERC20 via mint()), so the reader<->author value flow is
+ * exercised across distinct addresses.
  */
+const wethAbi = [
+  "function deposit() payable",
+  "function transfer(address,uint256) returns (bool)",
+  "function balanceOf(address) view returns (uint256)",
+  "function approve(address,uint256) returns (bool)",
+];
+
 async function main() {
   if (network.name !== "monadTestnet") throw new Error("run with --network monadTestnet");
 
   const rec = JSON.parse(readFileSync(join(__dirname, "..", "deployments", "monadTestnet.json"), "utf8"));
   const { ArticleRegistry: registryAddr, AttentionStream: streamAddr, paymentToken: tokenAddr } = rec.contracts;
-  if (!rec.paymentTokenIsMock) throw new Error("this smoke test assumes the MockERC20 payment token");
 
   const [deployer] = await ethers.getSigners();
   if (!deployer) throw new Error("no deployer signer");
 
   const registry = await ethers.getContractAt("ArticleRegistry", registryAddr, deployer);
   const streamAsDeployer = await ethers.getContractAt("AttentionStream", streamAddr, deployer);
-  const token = await ethers.getContractAt("MockERC20", tokenAddr, deployer);
 
   const net = await ethers.provider.getNetwork();
   const chainId = Number(net.chainId);
@@ -31,14 +37,30 @@ async function main() {
   const reader = ethers.Wallet.createRandom().connect(ethers.provider);
   console.log(`Deployer (author+treasury): ${deployer.address}`);
   console.log(`Reader (throwaway):         ${reader.address}`);
+  console.log(`Payment token:             ${tokenAddr} (${rec.paymentTokenIsMock ? "MockERC20" : "WMON"})`);
 
   const ratePerSec = 1_000_000_000_000_000n; // 1e15 base units / sec
   const budget = 60n * ratePerSec; // 6e16
+  const fund = budget * 2n;
   const gasTopUp = ethers.parseEther("0.3");
 
-  console.log(`\nFunding reader: ${ethers.formatEther(gasTopUp)} MON + ${ethers.formatUnits(budget * 4n, 18)} mUSD`);
+  console.log(`\nFunding reader: ${ethers.formatEther(gasTopUp)} MON gas + ${ethers.formatUnits(fund, 18)} payment tokens`);
   await (await deployer.sendTransaction({ to: reader.address, value: gasTopUp })).wait();
-  await (await token.mint(reader.address, budget * 4n)).wait();
+
+  const tokenAsReader = new ethers.Contract(tokenAddr, wethAbi, reader);
+  if (rec.paymentTokenIsMock) {
+    const mock = await ethers.getContractAt("MockERC20", tokenAddr, deployer);
+    await (await mock.mint(reader.address, fund)).wait();
+  } else {
+    // Deployer wraps MON -> WMON and sends it to the reader. Monad testnet
+    // applies state effects a bit after the receipt, so poll for the balance
+    // between the dependent txs.
+    const tokenAsDeployer = new ethers.Contract(tokenAddr, wethAbi, deployer);
+    await (await tokenAsDeployer.deposit({ value: fund })).wait();
+    await waitForBalance(tokenAsDeployer, deployer.address, fund, "deployer WMON");
+    await (await tokenAsDeployer.transfer(reader.address, fund)).wait();
+  }
+  await waitForBalance(tokenAsReader, reader.address, fund, "reader payment tokens");
 
   // --- publish -----------------------------------------------------------
   const contentHash = ethers.keccak256(ethers.toUtf8Bytes(`smoke ${Date.now()}`));
@@ -50,7 +72,6 @@ async function main() {
   console.log(`\nPublished article id ${articleId}`);
 
   // --- openSession -----------------------------------------------------
-  const tokenAsReader = token.connect(reader);
   const streamAsReader = streamAsDeployer.connect(reader);
   const sessionKey = ethers.Wallet.createRandom();
 
@@ -63,8 +84,8 @@ async function main() {
   console.log(`openSession: ${sessionId}`);
   console.log(`  session key: ${sessionKey.address}`);
 
-  const readerAfterOpen = await token.balanceOf(reader.address);
-  const deployerBeforeSettle = await token.balanceOf(deployer.address);
+  const readerAfterOpen: bigint = await tokenAsReader.balanceOf(reader.address);
+  const deployerBeforeSettle: bigint = await tokenAsReader.balanceOf(deployer.address);
 
   // --- wait so the rate cap ratePerSec*(elapsed+1) covers our voucher ---
   const waitS = 15;
@@ -80,9 +101,9 @@ async function main() {
   await (await streamAsDeployer.settle(sessionId, cumulative, signature)).wait();
   const fee = (cumulative * BigInt(rec.protocolFeeBps)) / 10_000n;
   const sess = await streamAsDeployer.sessions(sessionId);
-  console.log(`\nsettle(${ethers.formatUnits(cumulative, 18)}): claimed now ${ethers.formatUnits(sess.claimed, 18)} mUSD, fee ${ethers.formatUnits(fee, 18)}`);
+  console.log(`\nsettle(${ethers.formatUnits(cumulative, 18)}): claimed now ${ethers.formatUnits(sess.claimed, 18)}, fee ${ethers.formatUnits(fee, 18)}`);
 
-  const deployerAfterSettle = await token.balanceOf(deployer.address);
+  const deployerAfterSettle: bigint = await tokenAsReader.balanceOf(deployer.address);
   assertEq(deployerAfterSettle - deployerBeforeSettle, cumulative, "deployer (author+treasury) balance delta == cumulative");
   assertEq(sess.claimed, cumulative, "session.claimed == cumulative");
   assertEq(await streamAsDeployer.articleEarned(articleId), cumulative, "articleEarned == cumulative");
@@ -90,19 +111,34 @@ async function main() {
   // --- closeSession ------------------------------------------------------
   await (await streamAsReader.closeSession(sessionId, cumulative, signature)).wait();
   const closed = await streamAsDeployer.sessions(sessionId);
-  const readerFinal = await token.balanceOf(reader.address);
+  const readerFinal: bigint = await tokenAsReader.balanceOf(reader.address);
   console.log(`\ncloseSession: open now ${closed.open}`);
   assertEq(closed.open, false, "session.open == false after close");
   assertEq(readerAfterOpen + (budget - cumulative), readerFinal, "reader refunded budget - cumulative");
-  assertEq(readerFinal, budget * 4n - cumulative, "reader net mUSD spend == cumulative");
+  assertEq(readerFinal, fund - cumulative, "reader net token spend == cumulative");
 
-  console.log("\n✅ full loop OK: mint → publish → openSession → voucher → settle → closeSession");
+  console.log("\n✅ full loop OK: fund → publish → openSession → voucher → settle → closeSession");
 }
 
 function assertEq(a: unknown, b: unknown, label: string) {
   const ok = a === b || String(a) === String(b);
   console.log(`  ${ok ? "✓" : "✗"} ${label}${ok ? "" : `  (${a} !== ${b})`}`);
   if (!ok) throw new Error(`assertion failed: ${label}`);
+}
+
+async function waitForBalance(
+  token: InstanceType<typeof ethers.Contract>,
+  who: string,
+  target: bigint,
+  label: string,
+  timeoutMs = 60_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await token.balanceOf(who)) >= target) return;
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  throw new Error(`timed out waiting for ${label} balance >= ${target}`);
 }
 
 main().catch((e) => {

@@ -29,11 +29,19 @@ async function main() {
 
   const feeBps = Number(process.env.PROTOCOL_FEE_BPS ?? "250");
 
-  // 1. ArticleRegistry
-  const registry = await (await ethers.getContractFactory("ArticleRegistry")).deploy();
-  await registry.waitForDeployment();
-  const registryAddr = await registry.getAddress();
-  console.log(`ArticleRegistry: ${registryAddr}`);
+  // 1. ArticleRegistry: reuse ARTICLE_REGISTRY if set, else deploy a fresh one.
+  let registryAddr = process.env.ARTICLE_REGISTRY?.trim();
+  if (registryAddr) {
+    if ((await ethers.provider.getCode(registryAddr)) === "0x") {
+      throw new Error(`ARTICLE_REGISTRY ${registryAddr} has no code on ${network.name}`);
+    }
+    console.log(`ArticleRegistry: ${registryAddr}  (reused)`);
+  } else {
+    const registry = await (await ethers.getContractFactory("ArticleRegistry")).deploy();
+    await registry.waitForDeployment();
+    registryAddr = await registry.getAddress();
+    console.log(`ArticleRegistry: ${registryAddr}  (new)`);
+  }
 
   // 2. Payment token: reuse PAYMENT_TOKEN if set, else deploy a mock.
   let tokenAddr = process.env.PAYMENT_TOKEN?.trim();
@@ -45,6 +53,9 @@ async function main() {
     tokenIsMock = true;
     console.log(`MockERC20:       ${tokenAddr}  (no PAYMENT_TOKEN provided)`);
   } else {
+    if ((await ethers.provider.getCode(tokenAddr)) === "0x") {
+      throw new Error(`PAYMENT_TOKEN ${tokenAddr} has no code on ${network.name}`);
+    }
     console.log(`Payment token:   ${tokenAddr}`);
   }
 

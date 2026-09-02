@@ -186,8 +186,10 @@ cp .env.example .env             # set DEPLOYER_KEY, verify MONAD_RPC_URL / chai
 npm run deploy:monad
 ```
 
-The deploy script publishes `ArticleRegistry`, a `MockERC20` (unless
-`PAYMENT_TOKEN` is set), and `AttentionStream` with the deployer as treasury.
+The deploy script deploys `AttentionStream` with the deployer as treasury. It
+reuses `ARTICLE_REGISTRY` and `PAYMENT_TOKEN` when set (the current testnet
+deployment points at canonical **WMON**, `0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541`),
+and otherwise deploys a fresh `ArticleRegistry` / `MockERC20`.
 
 > Verify the current Monad testnet RPC URL and chain id before deploying — the
 > values in `packages/contracts/hardhat.config.ts` (chainId `10143`,
@@ -230,8 +232,9 @@ packages/
 ### Deployed (Monad testnet, chainId 10143)
 
 See [`packages/contracts/deployments/monadTestnet.json`](packages/contracts/deployments/monadTestnet.json).
-`AttentionStream` `0xcf3B5EB6dF13Fd6a7D2df26E57549653bB700a9F` ·
-`ArticleRegistry` `0x34C48D04c566131aEa6DBA8E2727423A55e38aaa`.
+`AttentionStream` `0xca364C7eC309c293216B43f6C069Ee9c5b6959cc` ·
+`ArticleRegistry` `0x34C48D04c566131aEa6DBA8E2727423A55e38aaa` ·
+payment token = WMON `0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541`.
 
 ---
 

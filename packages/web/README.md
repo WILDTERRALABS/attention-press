@@ -10,7 +10,9 @@ Next.js frontend for attention-press.
 - **`/article/[id]`** — renders the article and mounts `AttentionMeter` from
   `@attention-press/reader-sdk`. A live **spend meter** shows tokens streamed,
   engaged reading time, budget remaining and voucher count while you read.
-  Vouchers are POSTed to the collector at `NEXT_PUBLIC_COLLECTOR_URL`.
+  Vouchers are POSTed to the collector at `NEXT_PUBLIC_COLLECTOR_URL`. The
+  payment token is **WMON**; if your WMON balance is below the session budget the
+  page offers a one-click **Wrap MON** (`WMON.deposit()`) using your native MON.
 
 ## Run
 
