@@ -1,0 +1,5 @@
+{
+  "filter_paths": "node_modules|contracts/mocks",
+  "exclude_dependencies": true,
+  "exclude_informational": false
+}

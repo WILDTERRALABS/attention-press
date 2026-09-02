@@ -6,8 +6,11 @@
   "scripts": {
     "build": "hardhat compile",
     "test": "hardhat test",
+    "lint:sol": "solhint 'contracts/**/*.sol'",
+    "slither": "slither .",
     "preflight:monad": "hardhat run scripts/whoami.ts --network monadTestnet",
-    "deploy:monad": "hardhat run scripts/deploy.ts --network monadTestnet"
+    "deploy:monad": "hardhat run scripts/deploy.ts --network monadTestnet",
+    "deploy-actions:monad": "hardhat run scripts/deploy-actions.ts --network monadTestnet"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
@@ -15,6 +18,7 @@
     "@types/node": "^20.14.0",
     "dotenv": "^16.4.5",
     "hardhat": "^2.22.10",
+    "solhint": "^6.2.4",
     "ts-node": "^10.9.2",
     "typescript": "^5.5.4"
   }
