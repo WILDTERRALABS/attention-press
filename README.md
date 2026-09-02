@@ -6,9 +6,9 @@ Anyone can publish an article. Readers stream a micro-payment to the author for
 every second they actually spend reading. Engaging pieces hold attention longer
 and earn more — quality compounds, volume does not.
 
-**Status:** smart-contract core + reader SDK, both with full test suites
-(`@attention-press/contracts` 12 passing, `@attention-press/reader-sdk` 26
-passing). No collector service or frontend yet (see [Roadmap](#roadmap)).
+**Status:** contracts + reader SDK + author collector, all with test suites
+(12 · 26 · 32 passing). Contracts deployed to Monad testnet. No frontend yet
+(see [Roadmap](#roadmap)).
 
 ## Packages
 
@@ -16,6 +16,7 @@ passing). No collector service or frontend yet (see [Roadmap](#roadmap)).
 |---|---|
 | [`packages/contracts`](packages/contracts) | `ArticleRegistry` + `AttentionStream` (Hardhat, Solidity 0.8.24) |
 | [`packages/reader-sdk`](packages/reader-sdk) | `AttentionMeter` — client-side engagement tracking + EIP-712 voucher signing (TypeScript, viem) |
+| [`packages/collector`](packages/collector) | Author-side HTTP service — ingests vouchers, validates them like the contract, auto-`settle`s on an interval (Fastify, viem) |
 
 ---
 
@@ -207,14 +208,27 @@ packages/
       session/                   ephemeral key, EIP-712 voucher, accrual math
       chain/                     openSession / closeSession via EIP-1193
     test/                        voucher digest, accrual clamps, engagement, lifecycle
+  collector/
+    src/
+      routes.ts                  POST /vouchers, GET /sessions/:id, /authors/:a/earnings
+      voucher.ts                 EIP-712 recover + contract-mirroring validation
+      settleLoop.ts              interval task: settle sessions with pending vouchers
+      chain.ts store.ts config.ts
+    test/                        voucher validation, store snapshot, settle loop, HTTP routes
 ```
+
+### Deployed (Monad testnet, chainId 10143)
+
+See [`packages/contracts/deployments/monadTestnet.json`](packages/contracts/deployments/monadTestnet.json).
+`AttentionStream` `0xcf3B5EB6dF13Fd6a7D2df26E57549653bB700a9F` ·
+`ArticleRegistry` `0x34C48D04c566131aEa6DBA8E2727423A55e38aaa`.
 
 ---
 
 ## Roadmap
 
 1. ~~**Reader SDK**~~ — done: `@attention-press/reader-sdk`.
-2. **Author collector service** — receives vouchers, auto-`settle`s on an interval, exposes earnings.
+2. ~~**Author collector service**~~ — done: `@attention-press/collector`.
 3. **Next.js frontend** — publish flow (upload to IPFS → `publish`), reader view with a live spend meter, discovery ranked by real spend.
 4. **Indexer/subgraph** — leaderboards, per-article retention curves ("engagement", not just clicks).
 5. **Stake-to-publish** — refundable deposit, slashable by a plagiarism/DMCA challenge, to price out spam.

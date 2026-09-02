@@ -1,0 +1,26 @@
+{
+  "name": "@attention-press/collector",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Author-side service: ingest reader vouchers, validate them, and auto-settle on-chain",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "fastify": "^5.1.0",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.0"
+  }
+}
