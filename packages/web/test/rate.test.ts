@@ -1,24 +1,24 @@
+import { parseUnits } from "viem";
 import { describe, expect, it } from "vitest";
 import { RATE_TIERS, SESSION_SECONDS_CAP } from "../src/lib/chain";
 import { budgetFor, costForMinutes, ratePerSecFromPerMinute, tierById, tierByPerMinute } from "../src/lib/rate";
 
 describe("rate tiers", () => {
-  it("Standard tier ≈ 0.25 WMON for a 10-minute read", () => {
+  it("Standard tier is 1 WMON/min → 10 WMON for a 10-minute read", () => {
     const std = tierById("standard");
-    expect(std.perMinute).toBe("0.025");
-    expect(costForMinutes(std.perMinute, 10)).toBe("0.25");
+    expect(std.perMinute).toBe("1");
+    expect(costForMinutes(std.perMinute, 10)).toBe("10");
   });
 
   it("ratePerSecFromPerMinute divides the per-minute rate by 60", () => {
-    // 0.025 WMON/min = 25e15 wei/min / 60
-    expect(ratePerSecFromPerMinute("0.025")).toBe(25_000_000_000_000_000n / 60n);
-    expect(ratePerSecFromPerMinute("0.05")).toBe(50_000_000_000_000_000n / 60n);
+    expect(ratePerSecFromPerMinute("1")).toBe(parseUnits("1", 18) / 60n);
+    expect(ratePerSecFromPerMinute("2")).toBe(parseUnits("2", 18) / 60n);
   });
 
-  it("budgetFor is rate × the 30-minute session cap", () => {
-    const r = ratePerSecFromPerMinute("0.025");
+  it("budgetFor is rate × the 10-minute session cap", () => {
+    const r = ratePerSecFromPerMinute("1");
     expect(budgetFor(r)).toBe(r * SESSION_SECONDS_CAP);
-    expect(SESSION_SECONDS_CAP).toBe(1800n);
+    expect(SESSION_SECONDS_CAP).toBe(600n);
   });
 
   it("all tier rates are safely within uint64 and below their budget", () => {
@@ -32,7 +32,8 @@ describe("rate tiers", () => {
   });
 
   it("tierByPerMinute resolves stored strings, falls back to Standard", () => {
-    expect(tierByPerMinute("0.05").id).toBe("deep");
+    expect(tierByPerMinute("2").id).toBe("deep");
+    expect(tierByPerMinute("0.4").id).toBe("casual");
     expect(tierByPerMinute(undefined).id).toBe("standard");
     expect(tierByPerMinute("0.999").id).toBe("standard");
   });

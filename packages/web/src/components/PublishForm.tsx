@@ -146,7 +146,7 @@ export function PublishForm() {
         ))}
       </div>
       <p className="muted" style={{ fontSize: 13 }}>
-        ≈ {costForMinutes(tierById(tierId).perMinute, 10)} WMON for a 10-minute read · session capped at 30 min
+        ≈ {costForMinutes(tierById(tierId).perMinute, 10)} WMON for a 10-minute read · session capped at 10 min
       </p>
 
       <div style={{ marginTop: 18 }}>
