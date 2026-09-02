@@ -12,7 +12,8 @@
     "deploy:monad": "hardhat run scripts/deploy.ts --network monadTestnet",
     "deploy-actions:monad": "hardhat run scripts/deploy-actions.ts --network monadTestnet",
     "list-articles:monad": "hardhat run scripts/list-articles.ts --network monadTestnet",
-    "retire:monad": "hardhat run scripts/retire-articles.ts --network monadTestnet"
+    "retire:monad": "hardhat run scripts/retire-articles.ts --network monadTestnet",
+    "actions-smoke:monad": "hardhat run scripts/actions-smoke.ts --network monadTestnet"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
