@@ -100,12 +100,17 @@ author (minus a small protocol fee), with no funds ever held by the contract:
 | 👎 Dislike | 1 WMON | **treasury only** — an author must not profit from a negative signal |
 | 🎁 Tip | you choose | author |
 
-Like, dislike, and favorite are one per wallet per article. A downvote still
-costs the downvoter real money, so brigading is expensive rather than free.
-Replies are capped in length and in count per article to bound spam.
+Like, dislike, and favorite are one per wallet per article, with a live count
+shown under the article. A downvote still costs the downvoter real money, so
+brigading is expensive rather than free. The contract blocks an author from
+reacting to, replying to, or tipping their own article. Replies are capped in
+length and in count per article to bound spam.
 
 None of this is moderated by the contract — reply text is permanent and public
 by design. Front-ends and collectors can choose what to display.
+
+Every call does an exact-amount WMON approval and then the action — there are no
+unlimited token approvals anywhere in the flow.
 
 ---
 
@@ -134,8 +139,8 @@ Click **Stop** (or just leave) to close the session and get your refund.
 ### 4. React, reply, tip
 
 Under any article, the actions bar lets you like/dislike/favorite once, post a
-paid reply, or send the author a tip of any size. Each does an exact-amount WMON
-approval followed by the call — no infinite approvals.
+paid reply, or send the author a tip of any size. You approve exactly the amount
+each action costs — nothing more.
 
 ### 5. Publish
 
