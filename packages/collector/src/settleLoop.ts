@@ -45,7 +45,11 @@ export class SettleLoop {
           this.store.markDone(sessionId);
           continue;
         }
-        this.store.setAuthor(sessionId, session.author);
+        this.store.setSessionMeta(sessionId, {
+          author: session.author,
+          reader: session.reader,
+          articleId: session.articleId,
+        });
 
         if (!session.open) {
           this.store.markSettled(sessionId, session.claimed);

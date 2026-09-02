@@ -1,31 +1,25 @@
 "use client";
 
 import DOMPurify from "dompurify";
+import Link from "next/link";
 import { marked } from "marked";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAccount, useBalance, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { AttentionMeter, type Eip1193Provider } from "@attention-press/reader-sdk";
 import { SpendMeter, type MeterSnapshot } from "@/components/SpendMeter";
-import {
-  ATTENTION_STREAM,
-  CHAIN_ID,
-  COLLECTOR_URL,
-  DEFAULT_BUDGET,
-  DEFAULT_RATE_PER_SEC,
-  erc20Abi,
-  monadTestnet,
-} from "@/lib/chain";
+import { ATTENTION_STREAM, CHAIN_ID, COLLECTOR_URL, erc20Abi, monadTestnet } from "@/lib/chain";
 import { formatUnits, shortAddress } from "@/lib/format";
 import type { ArticleMetadata } from "@/lib/metadata";
+import { budgetFor, ratePerSecFromPerMinute, tierByPerMinute } from "@/lib/rate";
 import { useHydrated } from "@/lib/useHydrated";
 
-const initialSnap = (): MeterSnapshot => ({
+const makeInitialSnap = (budget: bigint, ratePerSec: bigint): MeterSnapshot => ({
   state: "idle",
   pauseReason: null,
   engagedSeconds: 0,
   streamed: 0n,
-  budget: DEFAULT_BUDGET,
-  ratePerSec: DEFAULT_RATE_PER_SEC,
+  budget,
+  ratePerSec,
   voucherCount: 0,
   sessionId: null,
   txHash: null,
@@ -52,7 +46,12 @@ export function ReaderClient({
   const publicClient = usePublicClient();
   const bodyRef = useRef<HTMLDivElement>(null);
   const meterRef = useRef<AttentionMeter | null>(null);
-  const [snap, setSnap] = useState<MeterSnapshot>(initialSnap);
+
+  const tier = tierByPerMinute(meta.ratePerMinute);
+  const ratePerSec = ratePerSecFromPerMinute(tier.perMinute);
+  const budget = budgetFor(ratePerSec);
+
+  const [snap, setSnap] = useState<MeterSnapshot>(() => makeInitialSnap(budget, ratePerSec));
   const [starting, setStarting] = useState(false);
 
   const html = useMemo(() => {
@@ -75,8 +74,8 @@ export function ReaderClient({
       contractAddress: ATTENTION_STREAM,
       chainId: CHAIN_ID,
       articleId,
-      ratePerSec: DEFAULT_RATE_PER_SEC,
-      budget: DEFAULT_BUDGET,
+      ratePerSec,
+      budget,
       provider: provider as Eip1193Provider,
       target: bodyRef.current ?? undefined,
       voucherIntervalMs: 5000,
@@ -115,7 +114,7 @@ export function ReaderClient({
     } finally {
       setStarting(false);
     }
-  }, [articleId, patch]);
+  }, [articleId, patch, ratePerSec, budget]);
 
   const stop = useCallback(async () => {
     try {
@@ -156,8 +155,8 @@ export function ReaderClient({
 
   const wmonBal = wmon.data ?? 0n;
   const monBal = mon.data?.value ?? 0n;
-  const enoughBalance = wmonBal >= DEFAULT_BUDGET;
-  const shortfall = DEFAULT_BUDGET > wmonBal ? DEFAULT_BUDGET - wmonBal : 0n;
+  const enoughBalance = wmonBal >= budget;
+  const shortfall = budget > wmonBal ? budget - wmonBal : 0n;
   // wrap the shortfall + a little headroom, if there's native MON to cover it
   const wrapAmount = shortfall + shortfall / 10n;
   const canWrap = monBal > wrapAmount;
@@ -189,7 +188,9 @@ export function ReaderClient({
       <h1>{meta.title}</h1>
       <p className="lede">
         by {meta.authorName ? `${meta.authorName} · ` : ""}
-        <code>{shortAddress(author)}</code>
+        <Link href={`/profile/${author}`}>
+          <code>{shortAddress(author)}</code>
+        </Link>
       </p>
 
       {hydrated && !isConnected && (
@@ -205,7 +206,7 @@ export function ReaderClient({
             {!enoughBalance && (
               <>
                 {" "}
-                — need {formatUnits(DEFAULT_BUDGET, tokenDecimals)} {tokenSymbol} to open a session
+                — need {formatUnits(budget, tokenDecimals)} {tokenSymbol} to open a session
               </>
             )}
           </span>

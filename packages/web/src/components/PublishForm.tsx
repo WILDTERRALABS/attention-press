@@ -4,8 +4,9 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { decodeEventLog } from "viem";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
-import { ARTICLE_REGISTRY, CHAIN_ID, articleRegistryAbi } from "@/lib/chain";
+import { ARTICLE_REGISTRY, CHAIN_ID, DEFAULT_TIER_ID, RATE_TIERS, articleRegistryAbi, type RateTierId } from "@/lib/chain";
 import { MAX_BODY_CHARS, contentHashOf, encodeMetadataURI } from "@/lib/metadata";
+import { costForMinutes, tierById } from "@/lib/rate";
 import { useHydrated } from "@/lib/useHydrated";
 
 export function PublishForm() {
@@ -18,6 +19,7 @@ export function PublishForm() {
   const [title, setTitle] = useState("");
   const [authorName, setAuthorName] = useState("");
   const [body, setBody] = useState("");
+  const [tierId, setTierId] = useState<RateTierId>(DEFAULT_TIER_ID);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,7 +34,13 @@ export function PublishForm() {
   async function submit() {
     setError(null);
     try {
-      const meta = { title: title.trim(), authorName: authorName.trim() || undefined, body, createdAt: Math.floor(Date.now() / 1000) };
+      const meta = {
+        title: title.trim(),
+        authorName: authorName.trim() || undefined,
+        body,
+        createdAt: Math.floor(Date.now() / 1000),
+        ratePerMinute: tierById(tierId).perMinute,
+      };
       const uri = encodeMetadataURI(meta);
       const contentHash = contentHashOf(body);
 
@@ -89,6 +97,24 @@ export function PublishForm() {
       </label>
       <textarea id="b" value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write something worth someone's attention…" />
       {tooLong && <p className="notice err">Body is over {MAX_BODY_CHARS.toLocaleString()} chars — trim it to keep the publish tx affordable.</p>}
+
+      <label>Reading pays the author</label>
+      <div className="tier-select">
+        {RATE_TIERS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={`tier${tierId === t.id ? " tier-on" : ""}`}
+            onClick={() => setTierId(t.id)}
+          >
+            <b>{t.label}</b>
+            <span>{t.perMinute} WMON/min</span>
+          </button>
+        ))}
+      </div>
+      <p className="muted" style={{ fontSize: 13 }}>
+        ≈ {costForMinutes(tierById(tierId).perMinute, 10)} WMON for a 10-minute read · session capped at 30 min
+      </p>
 
       <div style={{ marginTop: 18 }}>
         <button className="btn btn-primary" disabled={!canSubmit} onClick={submit}>

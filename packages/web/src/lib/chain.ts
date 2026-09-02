@@ -12,10 +12,22 @@ export const ATTENTION_STREAM = (process.env.NEXT_PUBLIC_ATTENTION_STREAM ??
 /** Canonical Wrapped MON (WMON) on Monad testnet — the payment token. */
 export const WMON = "0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541" as Address;
 
-export const DEFAULT_RATE_PER_SEC = BigInt(
-  process.env.NEXT_PUBLIC_DEFAULT_RATE_PER_SEC ?? "1000000000000000",
-);
-export const DEFAULT_BUDGET = BigInt(process.env.NEXT_PUBLIC_DEFAULT_BUDGET ?? "600000000000000000");
+/**
+ * Pay-rate tiers the author picks at publish time. Stored in article metadata as
+ * the `perMinute` string (WMON/min); `ratePerSec` and the session budget are
+ * derived from it (see lib/rate.ts). Standard = ~0.25 WMON for a 10-minute read.
+ */
+export const RATE_TIERS = [
+  { id: "casual", label: "Casual", perMinute: "0.0125" },
+  { id: "standard", label: "Standard", perMinute: "0.025" },
+  { id: "deep", label: "Deep read", perMinute: "0.05" },
+] as const;
+
+export type RateTierId = (typeof RATE_TIERS)[number]["id"];
+export const DEFAULT_TIER_ID: RateTierId = "standard";
+
+/** Session budget = rate × this (a 30-minute hard cap on a single reading session). */
+export const SESSION_SECONDS_CAP = 1800n;
 
 export const monadTestnet = defineChain({
   id: CHAIN_ID,

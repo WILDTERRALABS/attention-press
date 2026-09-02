@@ -19,11 +19,21 @@ describe("format", () => {
 });
 
 describe("metadata", () => {
-  it("round-trips title + body through the data URI", () => {
-    const meta = { title: "On slow reading", body: "# Hi\n\nSome *markdown* body — with unicode ✒️.", createdAt: 1_700_000_000 };
+  it("round-trips title + body + rate through the data URI", () => {
+    const meta = {
+      title: "On slow reading",
+      body: "# Hi\n\nSome *markdown* body — with unicode ✒️.",
+      createdAt: 1_700_000_000,
+      ratePerMinute: "0.025",
+    };
     const uri = encodeMetadataURI(meta);
     expect(uri.startsWith("data:application/json;base64,")).toBe(true);
     expect(decodeMetadataURI(uri)).toEqual({ ...meta, authorName: undefined });
+  });
+
+  it("tolerates pre-tier metadata with no ratePerMinute", () => {
+    const uri = encodeMetadataURI({ title: "old", body: "x", createdAt: 1 });
+    expect(decodeMetadataURI(uri)?.ratePerMinute).toBeUndefined();
   });
 
   it("returns null for non-data URIs", () => {

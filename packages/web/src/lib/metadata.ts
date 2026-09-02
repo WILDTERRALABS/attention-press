@@ -11,6 +11,8 @@ export interface ArticleMetadata {
   body: string;
   authorName?: string;
   createdAt: number;
+  /** WMON/min pay rate the author chose (string, e.g. "0.025"). Absent on pre-tier articles. */
+  ratePerMinute?: string;
 }
 
 const PREFIX = "data:application/json;base64,";
@@ -31,7 +33,13 @@ export function decodeMetadataURI(uri: string): ArticleMetadata | null {
           : decodeURIComponent(escape(atob(b64)));
       const m = JSON.parse(json) as Partial<ArticleMetadata>;
       if (typeof m.title !== "string" || typeof m.body !== "string") return null;
-      return { title: m.title, body: m.body, authorName: m.authorName, createdAt: Number(m.createdAt ?? 0) };
+      return {
+        title: m.title,
+        body: m.body,
+        authorName: m.authorName,
+        createdAt: Number(m.createdAt ?? 0),
+        ratePerMinute: typeof m.ratePerMinute === "string" ? m.ratePerMinute : undefined,
+      };
     }
     // Unknown scheme (e.g. a real ipfs:// URI) — caller should fetch it.
     return null;

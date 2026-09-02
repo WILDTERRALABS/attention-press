@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { isAddress, isHex, type Address, type Hex } from "viem";
+import { BIO_MAX_CHARS, verifyBioSignature } from "./profiles.js";
 import { verifyVoucher } from "./voucher.js";
 import type { ServerContext } from "./types.js";
 
@@ -71,7 +72,11 @@ export function registerRoutes(app: FastifyInstance, ctx: ServerContext): void {
     }
 
     ctx.store.putVoucher({ sessionId: sessionId as Hex, cumulativeAmount, signature: signature as Hex });
-    ctx.store.setAuthor(sessionId as Hex, session.author);
+    ctx.store.setSessionMeta(sessionId as Hex, {
+      author: session.author,
+      reader: session.reader,
+      articleId: session.articleId,
+    });
     ctx.store.metrics.vouchersAccepted++;
     return reply.code(202).send({ ok: true, sessionId, cumulativeAmount: cumulativeAmount.toString() });
   });
@@ -116,5 +121,39 @@ export function registerRoutes(app: FastifyInstance, ctx: ServerContext): void {
     const address = req.params.address;
     if (!isAddress(address)) return reply.code(400).send({ ok: false, reason: "bad address" });
     return ctx.store.earningsByAuthor(address as Address);
+  });
+
+  app.get<{ Params: { address: string } }>("/readers/:address/stats", async (req, reply) => {
+    const address = req.params.address;
+    if (!isAddress(address)) return reply.code(400).send({ ok: false, reason: "bad address" });
+    return ctx.store.readerStats(address as Address);
+  });
+
+  app.get<{ Params: { address: string } }>("/profiles/:address", async (req, reply) => {
+    const address = req.params.address;
+    if (!isAddress(address)) return reply.code(400).send({ ok: false, reason: "bad address" });
+    const bio = ctx.store.getBio(address as Address);
+    return { address, text: bio.text, updatedAt: bio.updatedAt };
+  });
+
+  // Set your own bio. Auth = a wallet signature over
+  // `attention-press: set bio for <address>\n\n<text>`.
+  app.post("/profiles", async (req, reply) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const address = String(body.address ?? "");
+    const text = typeof body.text === "string" ? body.text : "";
+    const signature = String(body.signature ?? "");
+
+    if (!isAddress(address)) return reply.code(400).send({ ok: false, reason: "bad address" });
+    if (text.length > BIO_MAX_CHARS) {
+      return reply.code(400).send({ ok: false, reason: `bio must be <= ${BIO_MAX_CHARS} chars` });
+    }
+    if (!isHex(signature)) return reply.code(400).send({ ok: false, reason: "signature must be hex" });
+
+    const ok = await verifyBioSignature(address as Address, text, signature as Hex);
+    if (!ok) return reply.code(401).send({ ok: false, reason: "signature does not match address" });
+
+    const bio = ctx.store.setBio(address as Address, text);
+    return reply.code(200).send({ ok: true, address, text: bio.text, updatedAt: bio.updatedAt });
   });
 }

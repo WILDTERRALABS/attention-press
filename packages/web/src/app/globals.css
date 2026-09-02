@@ -60,10 +60,12 @@ h2 { font-size: 19px; margin: 28px 0 10px; }
   border-radius: var(--radius); padding: 16px 18px; transition: border-color 0.15s;
 }
 .card:hover { border-color: var(--accent); }
+.card > a { display: block; color: inherit; }
 .card h3 { margin: 0 0 6px; font-size: 17px; }
 .card .preview { color: var(--muted); margin: 0 0 12px; font-size: 14px; }
-.card-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--text); }
-.card-meta .muted { color: var(--muted); margin-left: auto; }
+.card-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--text); align-items: baseline; }
+.card-meta a.muted { color: var(--muted); margin-left: auto; text-decoration: underline; }
+.card-meta a.muted:hover { color: var(--accent); }
 
 .muted { color: var(--muted); }
 
@@ -76,6 +78,16 @@ textarea { min-height: 240px; resize: vertical; font-family: ui-monospace, Menlo
 
 .row { display: flex; gap: 12px; }
 .row > * { flex: 1; }
+
+.tier-select { display: flex; gap: 10px; margin-top: 6px; }
+.tier {
+  flex: 1; display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 10px; padding: 10px 12px; cursor: pointer; font: inherit;
+}
+.tier:hover { border-color: var(--accent); }
+.tier-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel-2)); }
+.tier span { font-size: 12px; color: var(--muted); }
 
 .notice { border: 1px solid var(--border); background: var(--panel); border-radius: 10px; padding: 12px 14px; font-size: 14px; }
 .notice.err { border-color: var(--danger); color: #ffd9d9; }

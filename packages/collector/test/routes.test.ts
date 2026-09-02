@@ -138,6 +138,88 @@ describe("GET /health and /metrics", () => {
   });
 });
 
+describe("GET /readers/:address/stats", () => {
+  it("400s on a bad address", async () => {
+    const res = await app.inject({ method: "GET", url: "/readers/nope/stats" });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("aggregates sessions the reader paid for", async () => {
+    const signer = newAccount();
+    const reader = "0x1111111111111111111111111111111111111111";
+    const s = makeSession({
+      signer: signer.address,
+      reader,
+      articleId: 7n,
+      startTime: chain.ts - 100n,
+      ratePerSec: 1_000n,
+      budget: 10_000_000n,
+    });
+    chain.sessions.set(sid(), s);
+    const signature = await signVoucher(signer, sid(), 4_000n);
+    await app.inject({ method: "POST", url: "/vouchers", payload: { sessionId: sid(), cumulativeAmount: "4000", signature } });
+
+    const res = await app.inject({ method: "GET", url: `/readers/${reader}/stats` });
+    expect(res.json()).toMatchObject({ totalPaid: "4000", sessionsOpened: 1, articlesRead: 1 });
+  });
+});
+
+describe("profiles / bio", () => {
+  it("stores a bio with a valid wallet signature and reads it back", async () => {
+    const acct = newAccount();
+    const text = "writes about slow reading";
+    const signature = await acct.signMessage!({
+      message: `attention-press: set bio for ${acct.address.toLowerCase()}\n\n${text}`,
+    });
+
+    const post = await app.inject({
+      method: "POST",
+      url: "/profiles",
+      payload: { address: acct.address, text, signature },
+    });
+    expect(post.statusCode).toBe(200);
+    expect(post.json()).toMatchObject({ ok: true, text });
+
+    const get = await app.inject({ method: "GET", url: `/profiles/${acct.address}` });
+    expect(get.json()).toMatchObject({ address: acct.address, text });
+    expect(get.json().updatedAt).toBeGreaterThan(0);
+  });
+
+  it("401s when the signature is from a different key", async () => {
+    const owner = newAccount();
+    const attacker = newAccount();
+    const text = "not mine to set";
+    const signature = await attacker.signMessage!({
+      message: `attention-press: set bio for ${owner.address.toLowerCase()}\n\n${text}`,
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/profiles",
+      payload: { address: owner.address, text, signature },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("400s a bio over 280 chars", async () => {
+    const acct = newAccount();
+    const text = "x".repeat(281);
+    const signature = await acct.signMessage!({
+      message: `attention-press: set bio for ${acct.address.toLowerCase()}\n\n${text}`,
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/profiles",
+      payload: { address: acct.address, text, signature },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("returns an empty bio for an address that never set one", async () => {
+    const res = await app.inject({ method: "GET", url: "/profiles/0x2222222222222222222222222222222222222222" });
+    expect(res.json()).toMatchObject({ text: "", updatedAt: 0 });
+  });
+});
+
 describe("CORS", () => {
   it("answers the preflight for an allowed origin", async () => {
     const res = await app.inject({

@@ -16,8 +16,8 @@ exercised end-to-end (smoke test + live collector run).
 |---|---|
 | [`packages/contracts`](packages/contracts) | `ArticleRegistry` + `AttentionStream` (Hardhat, Solidity 0.8.24) |
 | [`packages/reader-sdk`](packages/reader-sdk) | `AttentionMeter` — client-side engagement tracking + EIP-712 voucher signing (TypeScript, viem) |
-| [`packages/collector`](packages/collector) | Author-side HTTP service — ingests vouchers, validates them like the contract, auto-`settle`s on an interval (Fastify, viem) |
-| [`packages/web`](packages/web) | Next.js frontend — discovery ranked by real spend, publish flow, reader view with a live spend meter (Next 15, wagmi) |
+| [`packages/collector`](packages/collector) | Author-side HTTP service — ingests vouchers, validates them like the contract, auto-`settle`s on an interval; also serves per-reader stats and signed author bios (Fastify, viem) |
+| [`packages/web`](packages/web) | Next.js frontend — discovery ranked by real spend, publish (with a 3-tier pay rate), reader view with a live spend meter, `/profile/[address]` (Next 15, wagmi) |
 
 ---
 

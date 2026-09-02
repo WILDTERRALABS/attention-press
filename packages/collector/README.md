@@ -46,9 +46,21 @@ On-chain session struct + the latest stored voucher + `pendingDelta`
 `{ author, settledTotal, pendingTotal, sessions: [{ sessionId, settled, pending }] }`
 — all base-10 strings. Totals are what this collector has observed.
 
+### `GET /readers/:address/stats`
+`{ reader, totalPaid, sessionsOpened, articlesRead }` — reflects only sessions
+whose vouchers reached this collector.
+
+### `GET /profiles/:address` · `POST /profiles`
+Off-chain author bio (≤280 chars). `GET` → `{ address, text, updatedAt }`.
+`POST { address, text, signature }` stores it — `signature` must sign
+`attention-press: set bio for <address>\n\n<text>` from that address (401 otherwise).
+
 ### `GET /health` · `GET /metrics`
 Wiring + liveness, and counters (`vouchersReceived/Accepted/Rejected`,
 `settleSent/Failed`).
+
+CORS: browser origins are allowed via `ALLOWED_ORIGINS` (comma-separated; default
+`http://localhost:3000`).
 
 ## How settlement works
 

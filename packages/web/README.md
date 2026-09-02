@@ -4,9 +4,13 @@ Next.js frontend for attention-press.
 
 - **`/`** — discovery. Every article ranked by `AttentionStream.articleEarned` —
   real tokens streamed by readers, not clicks.
-- **`/publish`** — connect wallet, write Markdown, `ArticleRegistry.publish`.
-  v1 stores `{title, body}` as an on-chain `data:` URI and sets
-  `contentHash = keccak256(body)` (no IPFS pin needed).
+- **`/publish`** — connect wallet, write Markdown, pick a pay-rate tier
+  (Casual / Standard / Deep), `ArticleRegistry.publish`. Stores
+  `{title, body, ratePerMinute}` as an on-chain `data:` URI;
+  `contentHash = keccak256(body)`. Tiers live in `src/lib/chain.ts`;
+  session budget = rate × 30 min.
+- **`/profile/[address]`** — published articles + earnings; reader totals (from
+  the collector); an editable bio (owner signs a message, no gas).
 - **`/article/[id]`** — renders the article and mounts `AttentionMeter` from
   `@attention-press/reader-sdk`. A live **spend meter** shows tokens streamed,
   engaged reading time, budget remaining and voucher count while you read.

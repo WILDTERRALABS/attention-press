@@ -8,11 +8,19 @@ interface SessionRecord {
   /** Highest cumulativeAmount we have successfully settled on-chain. */
   settledCumulative: bigint;
   author: Address | null;
+  reader: Address | null;
+  articleId: bigint | null;
   /** Session observed closed on-chain — stop tracking. */
   done: boolean;
 }
 
+interface BioRecord {
+  text: string;
+  updatedAt: number;
+}
+
 const bigMax = (a: bigint, b: bigint): bigint => (a > b ? a : b);
+const lc = (a: string | null | undefined): string => (a ?? "").toLowerCase();
 
 export interface CollectorMetrics {
   vouchersReceived: number;
@@ -23,12 +31,13 @@ export interface CollectorMetrics {
 }
 
 /**
- * In-memory latest-voucher-per-session plus settled totals, with a JSON
- * snapshot for crash recovery. Not a database — swap for SQLite/Postgres when
- * one collector serves many authors at volume.
+ * In-memory latest-voucher-per-session, settled totals, per-reader aggregates,
+ * and profile bios, with a JSON snapshot for crash recovery. Not a database —
+ * swap for SQLite/Postgres when one collector serves many authors at volume.
  */
 export class VoucherStore {
   private sessions = new Map<string, SessionRecord>();
+  private bios = new Map<string, BioRecord>();
   readonly metrics: CollectorMetrics = {
     vouchersReceived: 0,
     vouchersAccepted: 0,
@@ -47,7 +56,7 @@ export class VoucherStore {
   private rec(id: string): SessionRecord {
     let r = this.sessions.get(id);
     if (!r) {
-      r = { latest: null, settledCumulative: 0n, author: null, done: false };
+      r = { latest: null, settledCumulative: 0n, author: null, reader: null, articleId: null, done: false };
       this.sessions.set(id, r);
     }
     return r;
@@ -60,6 +69,18 @@ export class VoucherStore {
     r.latest = { ...v, receivedAt: Date.now() };
   }
 
+  /** Attach on-chain session facts (author / reader / articleId) as we learn them. */
+  setSessionMeta(
+    id: Hex,
+    meta: { author?: Address; reader?: Address; articleId?: bigint },
+  ): void {
+    const r = this.rec(id);
+    if (meta.author) r.author = meta.author;
+    if (meta.reader) r.reader = meta.reader;
+    if (meta.articleId !== undefined) r.articleId = meta.articleId;
+  }
+
+  /** @deprecated use setSessionMeta */
   setAuthor(id: Hex, author: Address): void {
     this.rec(id).author = author;
   }
@@ -95,12 +116,12 @@ export class VoucherStore {
     pendingTotal: string;
     sessions: Array<{ sessionId: string; settled: string; pending: string }>;
   } {
-    const key = author.toLowerCase();
+    const key = lc(author);
     let settled = 0n;
     let pending = 0n;
     const sessions: Array<{ sessionId: string; settled: string; pending: string }> = [];
     for (const [id, r] of this.sessions) {
-      if ((r.author ?? "").toLowerCase() !== key) continue;
+      if (lc(r.author) !== key) continue;
       const p = r.latest ? bigMax(r.latest.cumulativeAmount - r.settledCumulative, 0n) : 0n;
       settled += r.settledCumulative;
       pending += p;
@@ -109,24 +130,58 @@ export class VoucherStore {
     return { author, settledTotal: settled.toString(), pendingTotal: pending.toString(), sessions };
   }
 
+  /**
+   * Reader-side totals. Reflects only sessions whose vouchers reached THIS
+   * collector — sessions opened directly on-chain won't be counted.
+   */
+  readerStats(reader: Address): {
+    reader: Address;
+    totalPaid: string;
+    sessionsOpened: number;
+    articlesRead: number;
+  } {
+    const key = lc(reader);
+    let totalPaid = 0n;
+    let sessionsOpened = 0;
+    const articles = new Set<string>();
+    for (const [, r] of this.sessions) {
+      if (lc(r.reader) !== key) continue;
+      sessionsOpened += 1;
+      totalPaid += bigMax(r.settledCumulative, r.latest?.cumulativeAmount ?? 0n);
+      if (r.articleId !== null) articles.add(r.articleId.toString());
+    }
+    return { reader, totalPaid: totalPaid.toString(), sessionsOpened, articlesRead: articles.size };
+  }
+
+  setBio(address: Address, text: string): BioRecord {
+    const b = { text, updatedAt: Date.now() };
+    this.bios.set(lc(address), b);
+    return b;
+  }
+
+  getBio(address: Address): BioRecord {
+    return this.bios.get(lc(address)) ?? { text: "", updatedAt: 0 };
+  }
+
   snapshot(): void {
     if (!this.file) return;
     const out = {
-      version: 1 as const,
+      version: 2 as const,
       metrics: { ...this.metrics },
       sessions: Object.fromEntries(
         [...this.sessions].map(([id, r]) => [
           id,
           {
-            latest: r.latest
-              ? { ...r.latest, cumulativeAmount: r.latest.cumulativeAmount.toString() }
-              : null,
+            latest: r.latest ? { ...r.latest, cumulativeAmount: r.latest.cumulativeAmount.toString() } : null,
             settledCumulative: r.settledCumulative.toString(),
             author: r.author,
+            reader: r.reader,
+            articleId: r.articleId?.toString() ?? null,
             done: r.done,
           },
         ]),
       ),
+      bios: Object.fromEntries(this.bios),
     };
     writeFileSync(this.file, JSON.stringify(out, null, 2));
   }
@@ -148,21 +203,25 @@ export class VoucherStore {
           latest: { sessionId: Hex; cumulativeAmount: string; signature: Hex; receivedAt: number } | null;
           settledCumulative: string;
           author: string | null;
+          reader?: string | null;
+          articleId?: string | null;
           done: boolean;
         }
       >;
+      bios?: Record<string, BioRecord>;
     };
-    if (snap.version !== 1) return;
+    if (snap.version !== 1 && snap.version !== 2) return;
     for (const [id, s] of Object.entries(snap.sessions)) {
       this.sessions.set(id, {
-        latest: s.latest
-          ? { ...s.latest, cumulativeAmount: BigInt(s.latest.cumulativeAmount) }
-          : null,
+        latest: s.latest ? { ...s.latest, cumulativeAmount: BigInt(s.latest.cumulativeAmount) } : null,
         settledCumulative: BigInt(s.settledCumulative),
         author: (s.author as Address | null) ?? null,
+        reader: (s.reader as Address | null | undefined) ?? null,
+        articleId: s.articleId != null ? BigInt(s.articleId) : null,
         done: s.done,
       });
     }
+    for (const [k, v] of Object.entries(snap.bios ?? {})) this.bios.set(k, v);
     Object.assign(this.metrics, snap.metrics ?? {});
   }
 }
