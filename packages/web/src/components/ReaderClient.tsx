@@ -238,8 +238,9 @@ export function ReaderClient({
     <article>
       <h1>{meta.title}</h1>
       <p className="lede">
-        by {meta.authorName ? `${meta.authorName} · ` : ""}
+        by{" "}
         <Link href={`/profile/${author}`}>
+          {meta.authorName ? `${meta.authorName} · ` : ""}
           <code>{shortAddress(author)}</code>
         </Link>
       </p>

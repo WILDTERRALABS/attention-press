@@ -173,6 +173,13 @@ export class VoucherStore {
     return this.bios.get(lc(address)) ?? { text: "", updatedAt: 0 };
   }
 
+  /** Bios for many addresses at once, keyed by lowercased address (empty for unset). */
+  getBios(addresses: Address[]): Record<string, BioRecord> {
+    const out: Record<string, BioRecord> = {};
+    for (const a of addresses) out[lc(a)] = this.getBio(a);
+    return out;
+  }
+
   /** Register (or overwrite) the decryption key for an article, by its plaintext contentHash. */
   setArticleKey(contentHash: Hex, key: string, claimedAuthor: Address): void {
     this.articleKeys.set(lc(contentHash), { key, claimedAuthor, createdAt: Date.now() });

@@ -1,12 +1,12 @@
 "use client";
 
-import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { getAddress, isAddress } from "viem";
 import { useAccount, useReadContract, useSignMessage } from "wagmi";
-import { ATTENTION_STREAM, COLLECTOR_URL, attentionStreamAbi, erc20Abi } from "@/lib/chain";
-import { formatUnits, shortAddress } from "@/lib/format";
+import { ArticleCard } from "@/components/ArticleCard";
 import { useArticles } from "@/lib/articles";
+import { ATTENTION_STREAM, COLLECTOR_URL, attentionStreamAbi, erc20Abi } from "@/lib/chain";
+import { formatDuration, formatUnits, shortAddress } from "@/lib/format";
 import { useHydrated } from "@/lib/useHydrated";
 
 const BIO_MAX = 280;
@@ -27,8 +27,10 @@ export function ProfileClient({ address: raw }: { address: string }) {
   const isMe = valid && hydrated && !!connected && getAddress(connected) === address;
 
   const { articles, isLoading } = useArticles();
-  const mine = articles.filter((a) => a.author.toLowerCase() === address.toLowerCase() && !a.retired);
-  const totalEarned = mine.reduce((s, a) => s + a.earned, 0n);
+  const mine = useMemo(
+    () => articles.filter((a) => a.author.toLowerCase() === address.toLowerCase() && !a.retired),
+    [articles, address],
+  );
 
   const token = useReadContract({ address: ATTENTION_STREAM, abi: attentionStreamAbi, functionName: "token" });
   const symbol = useReadContract({ address: token.data, abi: erc20Abi, functionName: "symbol", query: { enabled: !!token.data } });
@@ -36,12 +38,43 @@ export function ProfileClient({ address: raw }: { address: string }) {
   const sym = symbol.data ?? "WMON";
   const dec = decimals.data ?? 18;
 
+  const [sortBy, setSortBy] = useState<"newest" | "earned">("newest");
   const [stats, setStats] = useState<ReaderStats | null>(null);
   const [bio, setBio] = useState("");
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [collectorUp, setCollectorUp] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
+
+  const totals = useMemo(() => {
+    let earned = 0n;
+    let readerSeconds = 0n;
+    let name: string | undefined;
+    let nameAt = -1;
+    for (const a of mine) {
+      earned += a.earned;
+      readerSeconds += a.readerSeconds;
+      if (a.metadata?.authorName && a.createdAt >= nameAt) {
+        name = a.metadata.authorName;
+        nameAt = a.createdAt;
+      }
+    }
+    return { earned, readerSeconds, name };
+  }, [mine]);
+
+  const sorted = useMemo(() => {
+    const list = [...mine];
+    list.sort((x, y) =>
+      sortBy === "newest"
+        ? y.createdAt - x.createdAt
+        : y.earned > x.earned
+          ? 1
+          : y.earned < x.earned
+            ? -1
+            : 0,
+    );
+    return list;
+  }, [mine, sortBy]);
 
   useEffect(() => {
     if (!valid) return;
@@ -91,36 +124,41 @@ export function ProfileClient({ address: raw }: { address: string }) {
 
   if (!valid) return <p className="notice err">Not a valid address.</p>;
 
+  const displayName = totals.name ?? shortAddress(address);
+  const nothingYet =
+    !isLoading && mine.length === 0 && !bio && (!stats || stats.sessionsOpened === 0);
+
   return (
     <>
-      <h1>{shortAddress(address)}</h1>
-      <p className="lede">
-        <code>{address}</code>
-      </p>
+      {/* Header card */}
+      <div className="card profile-header">
+        <div className="profile-header-top">
+          <div>
+            <h1>{displayName}</h1>
+            <code className="muted">{address}</code>
+          </div>
+          {isMe && collectorUp && draft === null && (
+            <button className="btn btn-ghost" onClick={() => setDraft(bio)}>
+              {bio ? "Edit bio" : "Add a bio"}
+            </button>
+          )}
+        </div>
 
-      {/* Bio */}
-      <section>
-        <h2>Bio</h2>
-        {!collectorUp && <p className="notice">Bio service (collector) unreachable.</p>}
         {draft === null ? (
-          <p className={bio ? "" : "muted"}>
-            {bio || "No bio yet."}
-            {isMe && collectorUp && (
-              <button className="btn btn-ghost" style={{ marginLeft: 10 }} onClick={() => setDraft(bio)}>
-                Edit
-              </button>
-            )}
-          </p>
+          bio ? (
+            <p className="profile-bio">{bio}</p>
+          ) : (
+            <p className="muted profile-bio">No bio yet.</p>
+          )
         ) : (
-          <>
+          <div className="profile-bio-edit">
             <textarea
               value={draft}
               maxLength={BIO_MAX}
               onChange={(e) => setDraft(e.target.value)}
-              style={{ minHeight: 90 }}
               placeholder="A sentence or two about what you write."
             />
-            <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+            <div className="row-inline">
               <button className="btn btn-primary" disabled={saving} onClick={saveBio}>
                 {saving ? "Sign & saving…" : "Save"}
               </button>
@@ -131,37 +169,51 @@ export function ProfileClient({ address: raw }: { address: string }) {
                 {draft.length}/{BIO_MAX} · one wallet signature, no gas
               </span>
             </div>
-          </>
+          </div>
         )}
         {msg && <p className="muted" style={{ fontSize: 13 }}>{msg}</p>}
-      </section>
 
-      {/* As an author */}
-      <section>
-        <h2>
-          Published{" "}
-          <span className="muted">
-            · {mine.length} article{mine.length === 1 ? "" : "s"} · {formatUnits(totalEarned, dec)} {sym} earned
+        <div className="stat-row">
+          <span>
+            <b>{mine.length}</b> article{mine.length === 1 ? "" : "s"}
           </span>
-        </h2>
+          <span>
+            <b>
+              {formatUnits(totals.earned, dec)} {sym}
+            </b>{" "}
+            earned
+          </span>
+          <span>
+            <b>{formatDuration(Number(totals.readerSeconds))}</b> reading time
+          </span>
+        </div>
+      </div>
+
+      {/* Articles */}
+      <section>
+        <div className="section-head">
+          <h2>Articles</h2>
+          <div className="sort-toggle">
+            <button className={sortBy === "newest" ? "on" : ""} onClick={() => setSortBy("newest")}>
+              Newest
+            </button>
+            <button className={sortBy === "earned" ? "on" : ""} onClick={() => setSortBy("earned")}>
+              Most earned
+            </button>
+          </div>
+        </div>
         {isLoading && <p className="muted">Loading…</p>}
         {!isLoading && mine.length === 0 && <p className="muted">Nothing published from this address.</p>}
         <div className="grid">
-          {mine.map((a) => (
-            <Link key={a.id.toString()} href={`/article/${a.id}`} className="card">
-              <h3>{a.metadata?.title ?? `Article #${a.id}`}</h3>
-              <div className="card-meta">
-                <span>💰 {formatUnits(a.earned, dec)} {sym}</span>
-                <span>👁 {a.sessions}</span>
-              </div>
-            </Link>
+          {sorted.map((a) => (
+            <ArticleCard key={a.id.toString()} a={a} tokenSymbol={sym} tokenDecimals={dec} />
           ))}
         </div>
       </section>
 
-      {/* As a reader */}
+      {/* Reading */}
       <section>
-        <h2>Reading</h2>
+        <h2>As a reader</h2>
         {!collectorUp ? (
           <p className="muted">Reader stats need the collector.</p>
         ) : !stats ? (
@@ -169,7 +221,10 @@ export function ProfileClient({ address: raw }: { address: string }) {
         ) : (
           <div className="card-meta" style={{ fontSize: 14 }}>
             <span>
-              <b>{formatUnits(BigInt(stats.totalPaid), dec)} {sym}</b> paid to authors
+              <b>
+                {formatUnits(BigInt(stats.totalPaid), dec)} {sym}
+              </b>{" "}
+              paid to authors
             </span>
             <span>
               <b>{stats.sessionsOpened}</b> sessions
@@ -183,6 +238,8 @@ export function ProfileClient({ address: raw }: { address: string }) {
           Counts sessions settled through this collector.
         </p>
       </section>
+
+      {nothingYet && <p className="muted">This address hasn&apos;t published or read anything yet.</p>}
     </>
   );
 }

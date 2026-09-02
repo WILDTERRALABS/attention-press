@@ -69,6 +69,45 @@ h2 { font-size: 19px; margin: 28px 0 10px; }
 
 .muted { color: var(--muted); }
 
+/* Tabs (discovery) */
+.tabs { display: flex; gap: 8px; margin: 0 0 18px; }
+.tab {
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--muted);
+  padding: 7px 16px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 14px;
+}
+.tab:hover { color: var(--text); }
+.tab-on { background: var(--accent); color: #0b0d12; border-color: var(--accent); font-weight: 600; }
+
+/* Author card */
+.author-card-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.author-card-top h3 { margin: 0; }
+.author-earned { font-weight: 700; white-space: nowrap; }
+
+/* Profile header */
+.profile-header { margin-bottom: 26px; }
+.profile-header-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.profile-header h1 { margin: 0 0 4px; }
+.profile-header code { font-size: 12px; word-break: break-all; }
+.profile-bio { font-size: 16px; line-height: 1.7; margin: 14px 0 0; }
+.profile-bio-edit { margin-top: 12px; }
+.profile-bio-edit textarea { min-height: 90px; }
+.row-inline { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.stat-row {
+  display: flex; flex-wrap: wrap; gap: 22px; margin-top: 16px; padding-top: 14px;
+  border-top: 1px solid var(--border); font-size: 14px; color: var(--muted);
+}
+.stat-row b { color: var(--text); font-size: 16px; }
+
+/* Section header with a sort toggle */
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sort-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.sort-toggle button {
+  background: var(--panel-2); color: var(--muted); border: 0; padding: 6px 12px;
+  cursor: pointer; font: inherit; font-size: 13px;
+}
+.sort-toggle button.on { background: var(--panel); color: var(--text); }
+.sort-toggle button + button { border-left: 1px solid var(--border); }
+
 label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
 input[type="text"], input[type="number"], textarea {
   width: 100%; background: var(--panel-2); border: 1px solid var(--border);

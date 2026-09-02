@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatSeconds, formatUnits, shortAddress } from "../src/lib/format";
+import { formatDuration, formatSeconds, formatUnits, shortAddress } from "../src/lib/format";
 import { contentHashOf, decodeMetadataURI, encodeMetadataURI, previewOf } from "../src/lib/metadata";
 
 describe("format", () => {
@@ -15,6 +15,15 @@ describe("format", () => {
     expect(shortAddress("0x1234567890abcdef1234567890abcdef12345678")).toBe("0x1234…5678");
     expect(formatSeconds(45)).toBe("45s");
     expect(formatSeconds(135)).toBe("2m 15s");
+  });
+
+  it("formatDuration collapses to the largest two units", () => {
+    expect(formatDuration(45)).toBe("45s");
+    expect(formatDuration(12 * 60)).toBe("12m");
+    expect(formatDuration(12 * 60 + 4)).toBe("12m 4s");
+    expect(formatDuration(3 * 3600 + 20 * 60)).toBe("3h 20m");
+    expect(formatDuration(2 * 3600)).toBe("2h");
+    expect(formatDuration(0)).toBe("0s");
   });
 });
 

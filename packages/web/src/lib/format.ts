@@ -20,3 +20,14 @@ export function formatSeconds(s: number): string {
   const r = sec % 60;
   return `${m}m ${r}s`;
 }
+
+/** Longer spans: "3h 20m", "12m", "45s". */
+export function formatDuration(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  if (m > 0) return sec > 0 ? `${m}m ${sec}s` : `${m}m`;
+  return `${sec}s`;
+}

@@ -2,16 +2,18 @@
 
 Next.js frontend for attention-press.
 
-- **`/`** — discovery. Every article ranked by `AttentionStream.articleEarned` —
-  real tokens streamed by readers, not clicks.
+- **`/`** — discovery, two tabs: **Articles** (ranked by `AttentionStream.articleEarned`)
+  and **Authors** (top authors by total earned, with bio snippets, → their page).
 - **`/publish`** — connect wallet, write Markdown, pick a pay-rate tier
   (Casual / Standard / Deep). The body is **AES-256-GCM encrypted client-side**;
   metadata stores `{title, preview, ratePerMinute, enc}` as an on-chain `data:`
   URI, `contentHash = keccak256(plaintext)`. The key is registered with the
   collector (author-signed) *before* the `publish` tx. **The collector operator
   can decrypt** — self-host for confidentiality.
-- **`/profile/[address]`** — published articles + earnings; reader totals (from
-  the collector); an editable bio (owner signs a message, no gas).
+- **`/profile/[address]`** — author landing page: header card (name + featured
+  bio + totals: articles / WMON earned / reading time), articles sortable by
+  newest or most-earned, and reader totals from the collector. Editable bio
+  (owner signs a message, no gas).
 - **`/article/[id]`** — public: title, byline, a short preview. On
   `session:started` the reader signs a request, the collector releases the key
   (checks `sessions(id)` is open + reader + articleId), and the body is decrypted

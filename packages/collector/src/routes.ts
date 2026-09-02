@@ -137,6 +137,20 @@ export function registerRoutes(app: FastifyInstance, ctx: ServerContext): void {
     return { address, text: bio.text, updatedAt: bio.updatedAt };
   });
 
+  // Batch bio lookup: /profiles?addresses=0xa,0xb -> { "0xa": {text,updatedAt}, ... }
+  app.get<{ Querystring: { addresses?: string } }>("/profiles", async (req, reply) => {
+    const list = (req.query.addresses ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (list.length === 0 || list.length > 100) {
+      return reply.code(400).send({ ok: false, reason: "pass 1..100 comma-separated addresses" });
+    }
+    const bad = list.find((a) => !isAddress(a));
+    if (bad) return reply.code(400).send({ ok: false, reason: `bad address: ${bad}` });
+    return ctx.store.getBios(list as Address[]);
+  });
+
   // Set your own bio. Auth = a wallet signature over
   // `attention-press: set bio for <address>\n\n<text>`.
   app.post("/profiles", async (req, reply) => {

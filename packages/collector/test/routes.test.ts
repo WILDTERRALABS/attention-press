@@ -218,6 +218,27 @@ describe("profiles / bio", () => {
     const res = await app.inject({ method: "GET", url: "/profiles/0x2222222222222222222222222222222222222222" });
     expect(res.json()).toMatchObject({ text: "", updatedAt: 0 });
   });
+
+  it("batch-returns bios by address list, empty for unset", async () => {
+    const a = newAccount();
+    const text = "batch me";
+    const sig = await a.signMessage!({
+      message: `attention-press: set bio for ${a.address.toLowerCase()}\n\n${text}`,
+    });
+    await app.inject({ method: "POST", url: "/profiles", payload: { address: a.address, text, signature: sig } });
+
+    const other = "0x2222222222222222222222222222222222222222";
+    const res = await app.inject({ method: "GET", url: `/profiles?addresses=${a.address},${other}` });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body[a.address.toLowerCase()].text).toBe("batch me");
+    expect(body[other.toLowerCase()]).toEqual({ text: "", updatedAt: 0 });
+  });
+
+  it("400s the batch endpoint on an empty or invalid list", async () => {
+    expect((await app.inject({ method: "GET", url: "/profiles" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/profiles?addresses=nope" })).statusCode).toBe(400);
+  });
 });
 
 describe("encrypted-article keys", () => {

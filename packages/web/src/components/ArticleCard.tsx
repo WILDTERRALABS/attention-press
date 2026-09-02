@@ -26,7 +26,7 @@ export function ArticleCard({ a, tokenSymbol, tokenDecimals }: { a: ArticleView;
         <span title="Average attention per reader">⏱ {formatSeconds(avgPerReader)}/reader</span>
         <span title="Author's pay tier">🏷 {tier.label}</span>
         <Link href={`/profile/${a.author}`} className="muted" title="Author profile">
-          by {shortAddress(a.author)}
+          by {a.metadata?.authorName || shortAddress(a.author)}
         </Link>
       </div>
     </div>
