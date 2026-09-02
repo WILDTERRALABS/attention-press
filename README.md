@@ -6,9 +6,9 @@ Anyone can publish an article. Readers stream a micro-payment to the author for
 every second they actually spend reading. Engaging pieces hold attention longer
 and earn more — quality compounds, volume does not.
 
-**Status:** contracts + reader SDK + author collector, all with test suites
-(12 · 26 · 32 passing). Contracts deployed to Monad testnet. No frontend yet
-(see [Roadmap](#roadmap)).
+**Status:** contracts + reader SDK + collector + web frontend, all with test
+suites (12 · 26 · 32 · 5 passing). Contracts deployed to Monad testnet and
+exercised end-to-end (smoke test + live collector run).
 
 ## Packages
 
@@ -17,6 +17,7 @@ and earn more — quality compounds, volume does not.
 | [`packages/contracts`](packages/contracts) | `ArticleRegistry` + `AttentionStream` (Hardhat, Solidity 0.8.24) |
 | [`packages/reader-sdk`](packages/reader-sdk) | `AttentionMeter` — client-side engagement tracking + EIP-712 voucher signing (TypeScript, viem) |
 | [`packages/collector`](packages/collector) | Author-side HTTP service — ingests vouchers, validates them like the contract, auto-`settle`s on an interval (Fastify, viem) |
+| [`packages/web`](packages/web) | Next.js frontend — discovery ranked by real spend, publish flow, reader view with a live spend meter (Next 15, wagmi) |
 
 ---
 
@@ -159,17 +160,22 @@ await meter.stop();
 ## Getting started
 
 ```bash
-npm install                     # workspace root — installs both packages
-npm test                        # contracts (12) + reader-sdk (26)
-npm run build                   # hardhat compile + tsup
+npm install                     # workspace root — installs every package
+npm test                        # contracts 12 · reader-sdk 26 · collector 32 · web 5
+npm run build                   # hardhat compile + tsup + tsc + next build
 ```
 
-Per package:
+Run the stack against Monad testnet:
 
 ```bash
-npm test  -w @attention-press/contracts
-npm test  -w @attention-press/reader-sdk
-npm run build -w @attention-press/reader-sdk
+# 1. collector — POSTs vouchers become settle() txs
+cd packages/collector && cp .env.example .env   # set SETTLER_PRIVATE_KEY
+npm run build && npm start                      # :8787
+
+# 2. frontend
+cd packages/web && cp .env.example .env.local   # addresses default to the deployed contracts
+npm run build -w @attention-press/reader-sdk    # web consumes its dist/
+npm run dev -w @attention-press/web             # http://localhost:3000
 ```
 
 Deploy to Monad testnet:
@@ -215,6 +221,10 @@ packages/
       settleLoop.ts              interval task: settle sessions with pending vouchers
       chain.ts store.ts config.ts
     test/                        voucher validation, store snapshot, settle loop, HTTP routes
+  web/
+    src/app/                     / (discovery), /publish, /article/[id]
+    src/components/              ReaderClient (mounts AttentionMeter) + SpendMeter, PublishForm
+    src/lib/                     chain defs/abis, wagmi config, data-URI metadata, formatting
 ```
 
 ### Deployed (Monad testnet, chainId 10143)
@@ -229,7 +239,7 @@ See [`packages/contracts/deployments/monadTestnet.json`](packages/contracts/depl
 
 1. ~~**Reader SDK**~~ — done: `@attention-press/reader-sdk`.
 2. ~~**Author collector service**~~ — done: `@attention-press/collector`.
-3. **Next.js frontend** — publish flow (upload to IPFS → `publish`), reader view with a live spend meter, discovery ranked by real spend.
+3. ~~**Next.js frontend**~~ — done: `@attention-press/web` (discovery, publish, reader view + live spend meter). Follow-ups: real IPFS pin, per-read rate/budget controls.
 4. **Indexer/subgraph** — leaderboards, per-article retention curves ("engagement", not just clicks).
 5. **Stake-to-publish** — refundable deposit, slashable by a plagiarism/DMCA challenge, to price out spam.
 6. **Native MON support** — a wrapper so readers can stream MON directly without approving an ERC-20.
