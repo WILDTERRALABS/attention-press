@@ -34,30 +34,40 @@ deploying it cannot affect sessions or the streaming flow. `git diff` on
 - Fixed prices are `constant`s (1 / 1 / 1 / 2 WMON); no setter, so a mutable
   price cannot interact badly with a `type(uint256).max` approval. The frontend
   requests exact-amount approvals anyway.
-- `actionFeeBps` ≤ `MAX_FEE_BPS` (1000 = 10%), owner-settable. Applied to
+- `treasury` is **immutable** — set once in the constructor, no setter. The
+  owner cannot redirect the fee / dislike flow to a new address; changing it
+  means a redeploy.
+- `actionFeeBps` ≤ `MAX_FEE_BPS` (1000 = 10%), owner-settable. The cap is
+  re-checked inside `setActionFeeBps` itself, so it is unbypassable. Applied to
   like / favorite / reply / tip. **Not** applied to `dislike`, which pays the
   full price to the treasury (the author must not earn from a negative signal).
+- `replyCount[id]` ≤ `MAX_REPLIES_PER_ARTICLE` (100 000) — a hard ceiling that
+  bounds worst-case event-log / indexer griefing by a well-funded spammer,
+  while sitting far above any realistic legitimate thread.
 
 ### Accepted risks (documented, not fixed)
 | Risk | Why it's accepted |
 | --- | --- |
 | Fee-on-transfer / rebasing tokens would under-deliver | `token` is immutable and set to WMON (a WETH9-style, non-fee token). Same stance as `AttentionStream`. |
 | Author-transfer front-run redirects a pending action's payment to the *new* author | No theft; the actor still performed the action. |
-| Reply text is permanent + public; the contract cannot moderate | By design (censorship-resistant). Bounded by `MAX_REPLY_BYTES = 1000`; frontend/collector can hide entries. |
+| Reply text is permanent + public; the contract cannot moderate | By design (censorship-resistant). Bounded by `MAX_REPLY_BYTES = 1000` per reply and `MAX_REPLIES_PER_ARTICLE = 100 000` per article; frontend/collector can hide entries. |
 | Sock-puppet inflation of like/favorite **counts** | Each fake action costs `actionFeeBps` of real WMON (the same defense `AttentionStream` uses for self-farming). `SelfAction` blocks the trivial same-address case. |
 | `pause()` is owner centralization (owner can freeze all interactions) | Standard emergency stop for a funds contract. **Mainnet requires `owner` = a timelocked multisig.** Testnet uses an EOA. |
 | `block.timestamp` in the reply record | Display-only; never gates logic. Slither does not flag it. |
 
 ## What was done
 
-- **Unit + adversarial tests** (`test/articleActions.test.ts`, 22 cases): fee
+- **Unit + adversarial tests** (`test/articleActions.test.ts`, 25 cases): fee
   math for every action, one-shot dedup reverts, `SelfAction`, retired/unknown
   article reverts, `transferFrom`-failure atomicity (no flag, no count), reply
-  length bounds, tip dust rounding, zero-balance invariant, owner-only + bps cap,
-  fee-0 path, `pause` gating, a `ReentrantERC20` proving `nonReentrant` rejects a
-  reentrant `like()` during `transferFrom`, and a combined `AttentionStream` +
-  `ArticleActions` fixture proving likes/tips during a live session leave the
-  session's `claimed` / `articleEarned` byte-identical.
+  length bounds, `MAX_REPLIES_PER_ARTICLE` enforcement (storage-slot fast-forward
+  to index 99 999), tip dust rounding, zero-balance invariant, owner-only + bps
+  cap, fee-0 path, `treasury` has no setter, constructor rejects zero
+  token/registry/treasury and an over-cap fee, `pause` gating, a `ReentrantERC20`
+  proving `nonReentrant` rejects a reentrant `like()` during `transferFrom`, and
+  a combined `AttentionStream` + `ArticleActions` fixture proving likes/tips
+  during a live session leave the session's `claimed` / `articleEarned`
+  byte-identical.
 - **Static analysis**: `slither .` (v0.11.6) — **zero findings on
   `ArticleActions.sol`** (`npm run slither`, needs `pip install
   slither-analyzer`). `solhint` — **zero errors** (`npm run lint:sol`).
@@ -76,7 +86,9 @@ deploying it cannot affect sessions or the streaming flow. `git diff` on
 - **Formal verification** (Certora / deep SMTChecker).
 - **A bug bounty** (Immunefi).
 - **Timelocked multisig ownership** — mainnet must not have an EOA holding
-  `pause` / `setActionFeeBps` / `setTreasury`.
+  `pause` / `setActionFeeBps` (`ArticleActions`) or the `AttentionStream` admin
+  setters. `ArticleActions.treasury` is already immutable, so it is not part of
+  this surface.
 - **On-chain monitoring / alerting** (Tenderly, OZ Defender Sentinels).
 - **A rigorous mechanism-design review** of the like/dislike/tip incentives —
   this file is reasoning, not modeling.

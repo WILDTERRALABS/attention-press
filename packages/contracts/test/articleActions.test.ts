@@ -140,6 +140,42 @@ describe("ArticleActions", () => {
       const { actions, articleId } = await deploy();
       await expect(actions.replyAt(articleId, 0n)).to.be.revertedWithCustomError(actions, "UnknownReply");
     });
+
+    it("enforces MAX_REPLIES_PER_ARTICLE", async () => {
+      const { reader, actions, actionsAddr, articleId } = await deploy();
+      expect(await actions.MAX_REPLIES_PER_ARTICLE()).to.equal(100_000n);
+
+      // Post one real reply so replyCount[articleId] == 1, then locate the
+      // mapping's storage slot empirically (no hardcoded layout assumption):
+      // it's the only base slot i in 0..31 for which keccak256(articleId, i)
+      // holds 1 while like/dislike/favorite counts are still 0.
+      await actions.connect(reader).reply(articleId, "first");
+      expect(await actions.replyCount(articleId)).to.equal(1n);
+
+      let replySlot: string | undefined;
+      for (let i = 0n; i < 32n; i++) {
+        const candidate = ethers.keccak256(
+          ethers.AbiCoder.defaultAbiCoder().encode(["uint256", "uint256"], [articleId, i]),
+        );
+        const raw = await ethers.provider.send("eth_getStorageAt", [actionsAddr, candidate, "latest"]);
+        if (BigInt(raw) === 1n) {
+          replySlot = candidate;
+          break;
+        }
+      }
+      expect(replySlot, "could not locate replyCount storage slot").to.not.equal(undefined);
+
+      const near = 100_000n - 1n;
+      await ethers.provider.send("hardhat_setStorageAt", [actionsAddr, replySlot!, ethers.toBeHex(near, 32)]);
+      expect(await actions.replyCount(articleId)).to.equal(near); // confirms we hit the right slot
+
+      await actions.connect(reader).reply(articleId, "the last allowed one"); // index 99_999 -> ok
+      expect(await actions.replyCount(articleId)).to.equal(100_000n);
+      await expect(actions.connect(reader).reply(articleId, "over the limit")).to.be.revertedWithCustomError(
+        actions,
+        "ReplyLimitReached",
+      );
+    });
   });
 
   describe("tip", () => {
@@ -224,14 +260,36 @@ describe("ArticleActions", () => {
       expect(await token.balanceOf(author.address)).to.equal(a0 + ONE);
     });
 
-    it("setTreasury rejects the zero address; pause blocks actions", async () => {
+    it("treasury is immutable — no setter exists", async () => {
+      const { actions } = await deploy();
+      expect((actions as unknown as { setTreasury?: unknown }).setTreasury).to.equal(undefined);
+    });
+
+    it("constructor rejects a zero treasury / token / registry / over-cap fee", async () => {
+      const registry = await (await ethers.getContractFactory("ArticleRegistry")).deploy();
+      const token = await (await ethers.getContractFactory("MockERC20")).deploy();
+      const Factory = await ethers.getContractFactory("ArticleActions");
+      await expect(
+        Factory.deploy(await token.getAddress(), await registry.getAddress(), ethers.ZeroAddress, 250n),
+      ).to.be.revertedWithCustomError(Factory, "BadParams");
+      await expect(
+        Factory.deploy(ethers.ZeroAddress, await registry.getAddress(), (await ethers.getSigners())[4].address, 250n),
+      ).to.be.revertedWithCustomError(Factory, "BadParams");
+      await expect(
+        Factory.deploy(
+          await token.getAddress(),
+          await registry.getAddress(),
+          (await ethers.getSigners())[4].address,
+          1001n,
+        ),
+      ).to.be.revertedWithCustomError(Factory, "BadParams");
+    });
+
+    it("pause blocks every action; unpause restores them", async () => {
       const { owner, reader, actions, articleId } = await deploy();
-      await expect(actions.connect(owner).setTreasury(ethers.ZeroAddress)).to.be.revertedWithCustomError(
-        actions,
-        "BadParams",
-      );
       await actions.connect(owner).pause();
       await expect(actions.connect(reader).like(articleId)).to.be.revertedWithCustomError(actions, "EnforcedPause");
+      await expect(actions.connect(reader).tip(articleId, 1n)).to.be.revertedWithCustomError(actions, "EnforcedPause");
       await actions.connect(owner).unpause();
       await actions.connect(reader).like(articleId); // works again
     });

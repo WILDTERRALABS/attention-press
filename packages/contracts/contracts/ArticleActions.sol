@@ -44,11 +44,17 @@ contract ArticleActions is Ownable, Pausable, ReentrancyGuard {
 
     uint16 public constant MAX_FEE_BPS = 1_000; // 10%
     uint256 public constant MAX_REPLY_BYTES = 1_000;
+    /// @notice Hard ceiling on replies per article — bounds worst-case event-log
+    ///         / indexer griefing by a well-funded spammer. Far above any
+    ///         realistic legitimate thread.
+    uint256 public constant MAX_REPLIES_PER_ARTICLE = 100_000;
 
     IERC20 public immutable token;
     IArticleRegistry public immutable registry;
+    /// @notice Immutable: set once at deploy, no setter. Removes the owner's
+    ///         ability to redirect the fee / dislike flow. Change it => redeploy.
+    address public immutable treasury;
 
-    address public treasury;
     /// @notice Skimmed to the treasury on like / favorite / reply / tip. Not applied
     ///         to dislike (which is 100% treasury already).
     uint16 public actionFeeBps;
@@ -83,7 +89,6 @@ contract ArticleActions is Ownable, Pausable, ReentrancyGuard {
     );
     event Tipped(uint256 indexed articleId, address indexed actor, uint256 toAuthor, uint256 fee);
     event ActionFeeUpdated(uint16 bps);
-    event TreasuryUpdated(address indexed treasury);
 
     error ArticleInactive();
     error SelfAction();
@@ -92,6 +97,7 @@ contract ArticleActions is Ownable, Pausable, ReentrancyGuard {
     error AlreadyFavorited();
     error BadParams();
     error UnknownReply();
+    error ReplyLimitReached();
 
     constructor(IERC20 _token, IArticleRegistry _registry, address _treasury, uint16 _feeBps) Ownable(msg.sender) {
         if (address(_token) == address(0) || address(_registry) == address(0) || _treasury == address(0)) {
@@ -157,6 +163,7 @@ contract ArticleActions is Ownable, Pausable, ReentrancyGuard {
         if (len == 0 || len > MAX_REPLY_BYTES) revert BadParams();
 
         uint256 index = replyCount[articleId];
+        if (index >= MAX_REPLIES_PER_ARTICLE) revert ReplyLimitReached();
         _replies[articleId][index] = Reply({actor: msg.sender, blockTime: uint64(block.timestamp)});
         unchecked {
             ++replyCount[articleId];
@@ -185,12 +192,6 @@ contract ArticleActions is Ownable, Pausable, ReentrancyGuard {
         if (bps > MAX_FEE_BPS) revert BadParams();
         actionFeeBps = bps;
         emit ActionFeeUpdated(bps);
-    }
-
-    function setTreasury(address t) external onlyOwner {
-        if (t == address(0)) revert BadParams();
-        treasury = t;
-        emit TreasuryUpdated(t);
     }
 
     function pause() external onlyOwner {
