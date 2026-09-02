@@ -175,6 +175,15 @@ textarea { min-height: 240px; resize: vertical; font-family: ui-monospace, Menlo
   border-radius: 6px; padding: 1px 6px; margin-right: 8px; vertical-align: middle;
 }
 
+/* One-time standing-allowance prompt */
+.approve-once {
+  border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+  border-radius: var(--radius); padding: 14px 16px; margin: 14px 0;
+}
+.approve-once-head { margin: 0 0 6px; font-weight: 600; }
+.approve-once .muted { font-size: 13px; margin: 0 0 12px; }
+.approve-once .btn { margin: 0; }
+
 /* Paid actions (like / dislike / favorite / reply / tip) */
 .actions { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--border); }
 .actions h2 { font-size: 18px; margin: 0 0 12px; }

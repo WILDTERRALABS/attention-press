@@ -32,8 +32,14 @@ deploying it cannot affect sessions or the streaming flow. `git diff` on
 - All actions require `registry.isActive(id)` (`ArticleInactive`) — retiring an
   article freezes interaction with it.
 - Fixed prices are `constant`s (1 / 1 / 1 / 2 WMON); no setter, so a mutable
-  price cannot interact badly with a `type(uint256).max` approval. The frontend
-  requests exact-amount approvals anyway.
+  price cannot inflate to drain a standing approval. For usability the frontend
+  requests a **bounded standing allowance** (default 100 WMON to `ArticleActions`,
+  500 WMON to `AttentionStream`) instead of an approval per action. That
+  allowance is only ever spent by a `transferFrom(msg.sender, …)` the caller
+  themselves triggers; neither contract is upgradeable; the reader can revoke in
+  their wallet. It is a real increase in trust surface over exact-amount
+  approvals — disclosed in the approval UI — bounded by an undiscovered contract
+  bug rather than by the approval amount.
 - `treasury` is **immutable** — set once in the constructor, no setter. The
   owner cannot redirect the fee / dislike flow to a new address; changing it
   means a redeploy.

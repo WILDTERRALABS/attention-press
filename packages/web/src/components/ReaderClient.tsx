@@ -6,9 +6,18 @@ import { marked } from "marked";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAccount, useBalance, usePublicClient, useReadContract, useSignMessage, useWriteContract } from "wagmi";
 import { AttentionMeter, type Eip1193Provider } from "@attention-press/reader-sdk";
+import { ApproveOnce } from "@/components/ApproveOnce";
 import { ArticleActions } from "@/components/ArticleActions";
 import { SpendMeter, type MeterSnapshot } from "@/components/SpendMeter";
-import { ATTENTION_STREAM, CHAIN_ID, COLLECTOR_URL, erc20Abi, monadTestnet } from "@/lib/chain";
+import {
+  ATTENTION_STREAM,
+  CHAIN_ID,
+  COLLECTOR_URL,
+  MIN_ALLOWANCE_STREAM,
+  STANDING_ALLOWANCE_STREAM,
+  erc20Abi,
+  monadTestnet,
+} from "@/lib/chain";
 import { decryptBody } from "@/lib/crypto";
 import { formatUnits, shortAddress } from "@/lib/format";
 import { contentHashOf, previewText, type ArticleMetadata } from "@/lib/metadata";
@@ -205,6 +214,16 @@ export function ReaderClient({
   const { writeContractAsync } = useWriteContract();
   const [wrapping, setWrapping] = useState(false);
 
+  // Standing WMON allowance to AttentionStream — approve once, then openSession
+  // is a single confirmation (the SDK skips its own approve when allowance ≥ budget).
+  const streamAllowance = useReadContract({
+    address: tokenAddress,
+    abi: erc20Abi,
+    functionName: "allowance",
+    args: address ? [address, ATTENTION_STREAM] : undefined,
+    query: { enabled: !!tokenAddress && !!address },
+  });
+
   const wmonBal = wmon.data ?? 0n;
   const monBal = mon.data?.value ?? 0n;
   const enoughBalance = wmonBal >= budget;
@@ -233,7 +252,9 @@ export function ReaderClient({
   }, [tokenAddress, address, wrapAmount, writeContractAsync, publicClient, wmon, mon, patch]);
 
   const onChain = hydrated && isConnected && chainId === CHAIN_ID;
-  const canStart = onChain && enoughBalance;
+  const allowanceForSession = (streamAllowance.data as bigint | undefined) ?? 0n;
+  const allowanceOk = allowanceForSession >= budget;
+  const canStart = onChain && enoughBalance && allowanceOk;
 
   return (
     <article>
@@ -272,6 +293,18 @@ export function ReaderClient({
               <span className="muted">not enough native MON to wrap — use the Monad faucet</span>
             ))}
         </p>
+      )}
+
+      {onChain && enoughBalance && (
+        <ApproveOnce
+          spender={ATTENTION_STREAM}
+          standing={STANDING_ALLOWANCE_STREAM}
+          min={MIN_ALLOWANCE_STREAM}
+          what="read"
+          tokenSymbol={tokenSymbol}
+          tokenDecimals={tokenDecimals}
+          onApproved={() => void streamAllowance.refetch()}
+        />
       )}
 
       <SpendMeter

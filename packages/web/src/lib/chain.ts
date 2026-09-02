@@ -30,6 +30,19 @@ export const ACTION_PRICES = {
 export const MAX_REPLY_BYTES = 1_000;
 
 /**
+ * Standing WMON allowances — approve once, then every reading session / reaction
+ * is a single confirmation instead of an approve + action pair. Bounded, not
+ * infinite: an allowance is only ever drawn when the reader themselves opens a
+ * session or taps an action (every transfer is `transferFrom(msg.sender, …)`),
+ * neither contract is upgradeable, and ArticleActions prices are constants.
+ * Tune freely — these are the only knobs.
+ */
+export const STANDING_ALLOWANCE_STREAM = 500_000000000000000000n; // 500 WMON — ~25 deep / 50 standard sessions
+export const MIN_ALLOWANCE_STREAM = 25_000000000000000000n; //     re-prompt below 25 WMON (~1 deep session)
+export const STANDING_ALLOWANCE_ACTIONS = 100_000000000000000000n; // 100 WMON — ~100 likes / 50 replies + tips
+export const MIN_ALLOWANCE_ACTIONS = 5_000000000000000000n; //      re-prompt below 5 WMON
+
+/**
  * Article floated to the top of discovery regardless of earnings (the project
  * explainer). Override with NEXT_PUBLIC_PINNED_ARTICLE_ID; 0 / unset => none.
  */

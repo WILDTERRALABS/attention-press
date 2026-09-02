@@ -3,8 +3,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { parseUnits } from "viem";
 import { useAccount, usePublicClient } from "wagmi";
-import { ACTION_PRICES, ARTICLE_ACTIONS, articleActionsAbi, CHAIN_ID, MAX_REPLY_BYTES } from "@/lib/chain";
+import {
+  ACTION_PRICES,
+  ARTICLE_ACTIONS,
+  articleActionsAbi,
+  CHAIN_ID,
+  MAX_REPLY_BYTES,
+  MIN_ALLOWANCE_ACTIONS,
+  STANDING_ALLOWANCE_ACTIONS,
+} from "@/lib/chain";
 import { useArticleActions, useSendAction } from "@/lib/actions";
+import { ApproveOnce } from "@/components/ApproveOnce";
 import { formatUnits, shortAddress } from "@/lib/format";
 import { useHydrated } from "@/lib/useHydrated";
 
@@ -139,6 +148,18 @@ export function ArticleActions({
       {hydrated && !isConnected && <p className="muted">Connect your wallet to react, reply, or tip.</p>}
       {hydrated && isConnected && chainId !== CHAIN_ID && <p className="muted">Switch to Monad Testnet.</p>}
       {isAuthor && <p className="muted">You&apos;re the author — you can&apos;t react to or tip your own article.</p>}
+
+      {onChain && !isAuthor && (
+        <ApproveOnce
+          spender={ARTICLE_ACTIONS as `0x${string}`}
+          standing={STANDING_ALLOWANCE_ACTIONS}
+          min={MIN_ALLOWANCE_ACTIONS}
+          what="react and tip"
+          tokenSymbol={tokenSymbol}
+          tokenDecimals={tokenDecimals}
+          onApproved={() => state.refetch()}
+        />
+      )}
 
       <div className="action-row">
         <button
