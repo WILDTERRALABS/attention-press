@@ -113,4 +113,28 @@ export const erc20Abi = [
     inputs: [{ name: "a", type: "address" }],
     outputs: [{ type: "uint256" }],
   },
+  {
+    type: "function",
+    name: "allowance",
+    stateMutability: "view",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" },
+    ],
+    outputs: [{ type: "uint256" }],
+  },
+  // MockERC20 only — permissionless testnet faucet.
+  {
+    type: "function",
+    name: "mint",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [],
+  },
 ] as const;
+
+/** Amount minted per click of the in-app test-token faucet (10 tokens @ 18 decimals). */
+export const FAUCET_MINT_AMOUNT = 10n * 10n ** 18n;

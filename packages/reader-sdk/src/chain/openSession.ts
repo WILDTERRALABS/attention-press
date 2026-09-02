@@ -55,7 +55,10 @@ export const openSession: OpenSessionFn = async (params) => {
         functionName: "approve",
         args: [params.contractAddress, params.budget],
       });
-      await publicClient.waitForTransactionReceipt({ hash: approveHash });
+      const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
+      if (approveReceipt.status === "reverted") {
+        throw new Error(`token approval reverted (${approveHash})`);
+      }
     }
   }
 
@@ -69,6 +72,14 @@ export const openSession: OpenSessionFn = async (params) => {
   });
 
   const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+
+  if (receipt.status === "reverted") {
+    throw new Error(
+      `openSession transaction reverted (${txHash}). ` +
+        `Usual causes: the reader's payment-token balance is below budget, the ` +
+        `allowance is insufficient, or the article is retired.`,
+    );
+  }
 
   for (const log of receipt.logs) {
     if (log.address.toLowerCase() !== params.contractAddress.toLowerCase()) continue;

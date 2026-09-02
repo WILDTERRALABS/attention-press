@@ -3,7 +3,7 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAccount } from "wagmi";
+import { useAccount, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { AttentionMeter, type Eip1193Provider } from "@attention-press/reader-sdk";
 import { SpendMeter, type MeterSnapshot } from "@/components/SpendMeter";
 import {
@@ -12,9 +12,11 @@ import {
   COLLECTOR_URL,
   DEFAULT_BUDGET,
   DEFAULT_RATE_PER_SEC,
+  FAUCET_MINT_AMOUNT,
+  erc20Abi,
   monadTestnet,
 } from "@/lib/chain";
-import { shortAddress } from "@/lib/format";
+import { formatUnits, shortAddress } from "@/lib/format";
 import type { ArticleMetadata } from "@/lib/metadata";
 
 const initialSnap = (): MeterSnapshot => ({
@@ -34,16 +36,19 @@ export function ReaderClient({
   articleId,
   meta,
   author,
+  tokenAddress,
   tokenSymbol,
   tokenDecimals,
 }: {
   articleId: bigint;
   meta: ArticleMetadata;
   author: `0x${string}`;
+  tokenAddress?: `0x${string}`;
   tokenSymbol: string;
   tokenDecimals: number;
 }) {
-  const { isConnected, chainId } = useAccount();
+  const { address, isConnected, chainId } = useAccount();
+  const publicClient = usePublicClient();
   const bodyRef = useRef<HTMLDivElement>(null);
   const meterRef = useRef<AttentionMeter | null>(null);
   const [snap, setSnap] = useState<MeterSnapshot>(initialSnap);
@@ -139,7 +144,41 @@ export function ReaderClient({
     };
   }, []);
 
-  const canStart = isConnected && chainId === CHAIN_ID;
+  // --- payment-token balance + in-app testnet faucet ---
+  const balance = useReadContract({
+    address: tokenAddress,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: address ? [address] : undefined,
+    query: { enabled: !!tokenAddress && !!address },
+  });
+  const { writeContractAsync: mintAsync } = useWriteContract();
+  const [minting, setMinting] = useState(false);
+
+  const bal = balance.data ?? 0n;
+  const enoughBalance = bal >= DEFAULT_BUDGET;
+
+  const mint = useCallback(async () => {
+    if (!tokenAddress || !address) return;
+    setMinting(true);
+    try {
+      const hash = await mintAsync({
+        address: tokenAddress,
+        abi: erc20Abi,
+        functionName: "mint",
+        args: [address, FAUCET_MINT_AMOUNT],
+      });
+      await publicClient?.waitForTransactionReceipt({ hash });
+      await balance.refetch();
+    } catch (err) {
+      patch({ error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setMinting(false);
+    }
+  }, [tokenAddress, address, mintAsync, publicClient, balance, patch]);
+
+  const onChain = isConnected && chainId === CHAIN_ID;
+  const canStart = onChain && enoughBalance;
 
   return (
     <article>
@@ -151,6 +190,25 @@ export function ReaderClient({
 
       {!isConnected && <p className="notice">Connect your wallet to start a paid reading session.</p>}
       {isConnected && chainId !== CHAIN_ID && <p className="notice">Switch to Monad Testnet.</p>}
+
+      {onChain && (
+        <p className="notice" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <span>
+            Balance: <b>{formatUnits(bal, tokenDecimals)} {tokenSymbol}</b>
+            {!enoughBalance && (
+              <>
+                {" "}
+                — need {formatUnits(DEFAULT_BUDGET, tokenDecimals)} {tokenSymbol} to open a session
+              </>
+            )}
+          </span>
+          {!enoughBalance && (
+            <button className="btn" disabled={minting || !tokenAddress} onClick={mint}>
+              {minting ? "Minting…" : `Get ${formatUnits(FAUCET_MINT_AMOUNT, tokenDecimals)} test ${tokenSymbol}`}
+            </button>
+          )}
+        </p>
+      )}
 
       <SpendMeter
         snap={snap}

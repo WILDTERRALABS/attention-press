@@ -28,6 +28,9 @@ export const closeSession: CloseSessionFn = async (params) => {
     functionName: "closeSession",
     args: [params.sessionId, params.cumulativeAmount, params.signature],
   });
-  await publicClient.waitForTransactionReceipt({ hash: txHash });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+  if (receipt.status === "reverted") {
+    throw new Error(`closeSession transaction reverted (${txHash})`);
+  }
   return txHash;
 };
