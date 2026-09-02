@@ -23,6 +23,11 @@ export const monadTestnet = defineChain({
   nativeCurrency: { name: "MON", symbol: "MON", decimals: 18 },
   rpcUrls: { default: { http: [RPC_URL] } },
   blockExplorers: { default: { name: "MonadScan", url: "https://testnet.monadscan.com" } },
+  contracts: {
+    // Canonical Multicall3 — lets viem collapse many reads into one eth_call
+    // so the public RPC's rate limit isn't tripped.
+    multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" },
+  },
   testnet: true,
 });
 
