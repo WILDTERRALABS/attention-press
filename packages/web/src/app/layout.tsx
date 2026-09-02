@@ -12,8 +12,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
-      <body>
+    // suppressHydrationWarning: wallet/other browser extensions mutate <html>/<body>
+    // (attributes, injected nodes) before React hydrates. This only suppresses the
+    // warning for these two elements' own attributes — not for our component tree.
+    <html lang="en" suppressHydrationWarning>
+      <body suppressHydrationWarning>
         <Providers>
           <header className="site-header">
             <Link href="/" className="brand">
