@@ -10,7 +10,10 @@ async function main(): Promise<void> {
   const chain = new ViemChainAdapter(config);
   const store = new VoucherStore(config.dataDir);
 
-  const app = buildServer({ chain, store, maxAccrualWindowSec: config.maxAccrualWindowSec }, { logger: true });
+  const app = buildServer(
+    { chain, store, maxAccrualWindowSec: config.maxAccrualWindowSec },
+    { logger: true, allowedOrigins: config.allowedOrigins },
+  );
   const loop = new SettleLoop(chain, store, {
     intervalMs: config.settleIntervalMs,
     minDelta: config.minSettleDelta,

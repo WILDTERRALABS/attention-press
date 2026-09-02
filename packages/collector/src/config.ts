@@ -29,5 +29,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollectorConfi
     minSettleDelta: BigInt(env.MIN_SETTLE_DELTA ?? "0"),
     dataDir: env.DATA_DIR?.trim() || ".data",
     maxAccrualWindowSec: BigInt(env.MAX_ACCRUAL_WINDOW_SEC ?? String(7 * 24 * 60 * 60)),
+    allowedOrigins: (env.ALLOWED_ORIGINS ?? "http://localhost:3000")
+      .split(",")
+      .map((o) => o.trim())
+      .filter(Boolean),
   };
 }

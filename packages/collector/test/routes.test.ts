@@ -11,7 +11,10 @@ let store: VoucherStore;
 beforeEach(() => {
   chain = new FakeChain();
   store = new VoucherStore();
-  app = buildServer({ chain, store, maxAccrualWindowSec: MAX_ACCRUAL_WINDOW });
+  app = buildServer(
+    { chain, store, maxAccrualWindowSec: MAX_ACCRUAL_WINDOW },
+    { allowedOrigins: ["http://localhost:3000"] },
+  );
 });
 afterEach(async () => {
   await app.close();
@@ -132,5 +135,31 @@ describe("GET /health and /metrics", () => {
   it("metrics echoes counters", async () => {
     const res = await app.inject({ method: "GET", url: "/metrics" });
     expect(res.json()).toHaveProperty("vouchersReceived", 0);
+  });
+});
+
+describe("CORS", () => {
+  it("answers the preflight for an allowed origin", async () => {
+    const res = await app.inject({
+      method: "OPTIONS",
+      url: "/vouchers",
+      headers: {
+        origin: "http://localhost:3000",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "content-type",
+      },
+    });
+    expect(res.statusCode).toBeLessThan(300);
+    expect(res.headers["access-control-allow-origin"]).toBe("http://localhost:3000");
+  });
+
+  it("reflects the allow-origin header on an actual POST", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/vouchers",
+      headers: { origin: "http://localhost:3000" },
+      payload: { sessionId: "bad", cumulativeAmount: "1", signature: "0x1" },
+    });
+    expect(res.headers["access-control-allow-origin"]).toBe("http://localhost:3000");
   });
 });

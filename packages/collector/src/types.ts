@@ -38,6 +38,8 @@ export interface CollectorConfig {
   dataDir: string;
   /** Mirror of the contract's MAX_ACCRUAL_WINDOW (seconds). */
   maxAccrualWindowSec: bigint;
+  /** Browser origins allowed to call the API (CORS). */
+  allowedOrigins: string[];
 }
 
 /** The chain operations the collector needs; real impl uses viem, tests fake it. */
