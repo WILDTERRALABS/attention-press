@@ -15,6 +15,9 @@ coverage.json
 dist/
 *.tsbuildinfo
 
+# Collector runtime state
+.data/
+
 # Environment / secrets (keep .env.example tracked)
 .env
 .env.*
