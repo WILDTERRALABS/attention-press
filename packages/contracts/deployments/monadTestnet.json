@@ -6,9 +6,13 @@
   "contracts": {
     "ArticleRegistry": "0x34C48D04c566131aEa6DBA8E2727423A55e38aaa",
     "AttentionStream": "0xca364C7eC309c293216B43f6C069Ee9c5b6959cc",
-    "paymentToken": "0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541"
+    "paymentToken": "0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541",
+    "ArticleActions": "0x04D91BC0bF42EF2bD639B565b5f53644930E80AC"
   },
   "paymentTokenIsMock": false,
   "protocolFeeBps": 250,
-  "treasury": "0x67dEf124555dDAABb406D4c79e65218F952f3668"
+  "treasury": "0x67dEf124555dDAABb406D4c79e65218F952f3668",
+  "actionFeeBps": 250,
+  "actionsTreasury": "0x67dEf124555dDAABb406D4c79e65218F952f3668",
+  "actionsDeployedAt": "2026-09-02T08:45:35.376Z"
 }

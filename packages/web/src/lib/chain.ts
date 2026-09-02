@@ -11,10 +11,12 @@ export const ATTENTION_STREAM = (process.env.NEXT_PUBLIC_ATTENTION_STREAM ??
 
 /**
  * ArticleActions (like / dislike / favorite / reply / tip). Deployed separately
- * via `scripts/deploy-actions.ts`; set NEXT_PUBLIC_ARTICLE_ACTIONS after that.
- * Empty string => the actions bar renders a "not configured" note and no calls.
+ * via `scripts/deploy-actions.ts` (see deployments/monadTestnet.json). Override
+ * with NEXT_PUBLIC_ARTICLE_ACTIONS; empty string => the actions bar renders a
+ * "not configured" note and makes no calls.
  */
-export const ARTICLE_ACTIONS = (process.env.NEXT_PUBLIC_ARTICLE_ACTIONS ?? "") as Address | "";
+export const ARTICLE_ACTIONS = (process.env.NEXT_PUBLIC_ARTICLE_ACTIONS ??
+  "0x04D91BC0bF42EF2bD639B565b5f53644930E80AC") as Address | "";
 
 /** Fixed action prices, mirrored from ArticleActions.sol (base units, 18 dp). */
 export const ACTION_PRICES = {
