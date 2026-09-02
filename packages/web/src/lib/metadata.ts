@@ -52,5 +52,27 @@ export function contentHashOf(body: string): Hex {
   return keccak256(toBytes(body));
 }
 
+/**
+ * Public teaser: strip Markdown, keep the first few sentences. Shown before a
+ * reading session is open; the rest is gated in the UI.
+ */
+export function previewOf(body: string, maxSentences = 3, maxChars = 320): string {
+  const plain = body
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/[*_`~>#]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!plain) return "";
+  const sentences = plain.match(/[^.!?]+[.!?]+(\s|$)/g)?.map((s) => s.trim()) ?? [plain];
+  let out = sentences.slice(0, maxSentences).join(" ").trim();
+  const truncatedByChars = out.length > maxChars;
+  if (truncatedByChars) out = out.slice(0, maxChars).replace(/\s+\S*$/, "");
+  if (truncatedByChars || sentences.length > maxSentences || out.length < plain.length) out += " …";
+  return out;
+}
+
 /** Rough guard so publish() calldata stays sane on testnet. */
 export const MAX_BODY_CHARS = 20_000;

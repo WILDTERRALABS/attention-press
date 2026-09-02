@@ -9,7 +9,7 @@ import { AttentionMeter, type Eip1193Provider } from "@attention-press/reader-sd
 import { SpendMeter, type MeterSnapshot } from "@/components/SpendMeter";
 import { ATTENTION_STREAM, CHAIN_ID, COLLECTOR_URL, erc20Abi, monadTestnet } from "@/lib/chain";
 import { formatUnits, shortAddress } from "@/lib/format";
-import type { ArticleMetadata } from "@/lib/metadata";
+import { previewOf, type ArticleMetadata } from "@/lib/metadata";
 import { budgetFor, ratePerSecFromPerMinute, tierByPerMinute } from "@/lib/rate";
 import { useHydrated } from "@/lib/useHydrated";
 
@@ -53,12 +53,15 @@ export function ReaderClient({
 
   const [snap, setSnap] = useState<MeterSnapshot>(() => makeInitialSnap(budget, ratePerSec));
   const [starting, setStarting] = useState(false);
+  // Soft paywall: full body only renders while a reading session is open.
+  const [unlocked, setUnlocked] = useState(false);
 
+  const preview = useMemo(() => previewOf(meta.body), [meta.body]);
   const html = useMemo(() => {
-    if (!hydrated) return "";
+    if (!hydrated || !unlocked) return "";
     const raw = marked.parse(meta.body, { async: false }) as string;
     return DOMPurify.sanitize(raw);
-  }, [hydrated, meta.body]);
+  }, [hydrated, unlocked, meta.body]);
 
   const patch = useCallback((p: Partial<MeterSnapshot>) => setSnap((s) => ({ ...s, ...p })), []);
 
@@ -94,13 +97,19 @@ export function ReaderClient({
     });
     meterRef.current = meter;
 
-    meter.on("session:started", (e) => patch({ state: "reading", sessionId: e.sessionId, txHash: e.txHash, error: null }));
+    meter.on("session:started", (e) => {
+      setUnlocked(true);
+      patch({ state: "reading", sessionId: e.sessionId, txHash: e.txHash, error: null });
+    });
     meter.on("voucher:signed", (e) =>
       patch({ streamed: e.cumulativeAmount, voucherCount: e.index + 1, engagedSeconds: e.engagedSeconds }),
     );
     meter.on("session:paused", (e) => patch({ state: "paused", pauseReason: e.reason, engagedSeconds: e.engagedSeconds }));
     meter.on("session:resumed", (e) => patch({ state: "reading", pauseReason: null, engagedSeconds: e.engagedSeconds }));
-    meter.on("session:ended", (e) => patch({ state: "ended", streamed: e.finalCumulative, engagedSeconds: e.engagedSeconds }));
+    meter.on("session:ended", (e) => {
+      setUnlocked(false);
+      patch({ state: "ended", streamed: e.finalCumulative, engagedSeconds: e.engagedSeconds });
+    });
     meter.on("error", (e) =>
       patch({ error: `${e.phase}: ${e.error instanceof Error ? e.error.message : String(e.error)}` }),
     );
@@ -232,7 +241,21 @@ export function ReaderClient({
         starting={starting}
       />
 
-      <div ref={bodyRef} className="article-body" dangerouslySetInnerHTML={{ __html: html }} />
+      {/* Stable container so the engagement tracker keeps the same scroll target
+          before and after unlock; children swap on session start/end. */}
+      <div ref={bodyRef} className="article-body">
+        {unlocked ? (
+          <div dangerouslySetInnerHTML={{ __html: html }} />
+        ) : (
+          <div className="article-locked">
+            <p className="preview-text">{preview}</p>
+            <p className="lock-note">
+              🔒 The rest is locked. Start a reading session above to unlock the full article —
+              you pay the author only for the time you spend reading.
+            </p>
+          </div>
+        )}
+      </div>
     </article>
   );
 }
