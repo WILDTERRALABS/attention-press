@@ -1,6 +1,6 @@
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import type { Account, Address, Hex } from "viem";
-import type { ChainAdapter, OnChainSession } from "../src/types.js";
+import type { ChainAdapter, OnChainArticle, OnChainSession } from "../src/types.js";
 import { VOUCHER_TYPES, voucherDomain } from "../src/voucher.js";
 
 export const STREAM = "0x00000000000000000000000000000000000000AA" as Address;
@@ -52,12 +52,17 @@ export class FakeChain implements ChainAdapter {
 
   sessions = new Map<string, OnChainSession>();
   ts = 2_000_000n;
+  articles = new Map<string, OnChainArticle>();
   settleCalls: Array<{ id: Hex; amount: bigint; sig: Hex }> = [];
   settleError: Error | null = null;
   blockError: Error | null = null;
 
   async getSession(id: Hex): Promise<OnChainSession | null> {
     return this.sessions.get(id) ?? null;
+  }
+
+  async getArticle(id: bigint): Promise<OnChainArticle | null> {
+    return this.articles.get(id.toString()) ?? null;
   }
 
   async latestBlockTimestamp(): Promise<bigint> {

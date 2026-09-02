@@ -36,7 +36,22 @@ describe("metadata", () => {
     expect(decodeMetadataURI(uri)?.ratePerMinute).toBeUndefined();
   });
 
-  it("returns null for non-data URIs", () => {
+  it("decodes encrypted metadata (enc + preview, no plaintext body)", () => {
+    const meta = {
+      title: "Gated piece",
+      createdAt: 1,
+      ratePerMinute: "0.025",
+      preview: "The first few sentences …",
+      enc: { alg: "AES-GCM" as const, iv: "aXY=", ct: "Y3Q=" },
+    };
+    const decoded = decodeMetadataURI(encodeMetadataURI(meta));
+    expect(decoded?.enc?.ct).toBe("Y3Q=");
+    expect(decoded?.preview).toBe("The first few sentences …");
+    expect(decoded?.body).toBeUndefined();
+  });
+
+  it("returns null for metadata with neither body nor enc, and for non-data URIs", () => {
+    expect(decodeMetadataURI(encodeMetadataURI({ title: "x", createdAt: 1 }))).toBeNull();
     expect(decodeMetadataURI("ipfs://bafyxyz")).toBeNull();
     expect(decodeMetadataURI("")).toBeNull();
   });

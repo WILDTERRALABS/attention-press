@@ -32,6 +32,7 @@ export interface CollectorConfig {
   rpcUrl: string;
   chainId: number;
   streamAddress: Address;
+  registryAddress: Address;
   settlerPrivateKey: Hex;
   settleIntervalMs: number;
   minSettleDelta: bigint;
@@ -42,12 +43,19 @@ export interface CollectorConfig {
   allowedOrigins: string[];
 }
 
+export interface OnChainArticle {
+  author: Address;
+  contentHash: Hex;
+  retired: boolean;
+}
+
 /** The chain operations the collector needs; real impl uses viem, tests fake it. */
 export interface ChainAdapter {
   readonly chainId: number;
   readonly streamAddress: Address;
   readonly settlerAddress: Address;
   getSession(sessionId: Hex): Promise<OnChainSession | null>;
+  getArticle(articleId: bigint): Promise<OnChainArticle | null>;
   latestBlockTimestamp(): Promise<bigint>;
   /** Send `settle(sessionId, cumulativeAmount, signature)` and wait for the receipt. */
   settle(sessionId: Hex, cumulativeAmount: bigint, signature: Hex): Promise<Hex>;

@@ -17,7 +17,14 @@ exercised end-to-end (smoke test + live collector run).
 | [`packages/contracts`](packages/contracts) | `ArticleRegistry` + `AttentionStream` (Hardhat, Solidity 0.8.24) |
 | [`packages/reader-sdk`](packages/reader-sdk) | `AttentionMeter` — client-side engagement tracking + EIP-712 voucher signing (TypeScript, viem) |
 | [`packages/collector`](packages/collector) | Author-side HTTP service — ingests vouchers, validates them like the contract, auto-`settle`s on an interval; also serves per-reader stats and signed author bios (Fastify, viem) |
-| [`packages/web`](packages/web) | Next.js frontend — discovery ranked by real spend, publish (with a 3-tier pay rate), reader view with a live spend meter, `/profile/[address]` (Next 15, wagmi) |
+| [`packages/web`](packages/web) | Next.js frontend — discovery, publish (3-tier rate, **AES-encrypted body**), reader view with a live spend meter + session-gated decryption, `/profile/[address]` (Next 15, wagmi) |
+
+**Content gating:** article bodies are AES-256-GCM encrypted; `contentHash` still
+commits to the plaintext. The collector custodies the per-article key and
+releases it only after verifying an open on-chain session for that reader + that
+article. **Trust note:** the collector operator can decrypt any article it holds
+a key for — run your own collector if that matters. A threshold/DKG key-release
+scheme would remove this and slots into the same endpoint.
 
 ---
 

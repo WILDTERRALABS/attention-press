@@ -8,7 +8,7 @@ import {
   type PrivateKeyAccount,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import type { ChainAdapter, CollectorConfig, OnChainSession } from "./types.js";
+import type { ChainAdapter, CollectorConfig, OnChainArticle, OnChainSession } from "./types.js";
 
 export const streamAbi = [
   {
@@ -41,10 +41,26 @@ export const streamAbi = [
   },
 ] as const;
 
+export const registryAbi = [
+  {
+    type: "function",
+    name: "articles",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "uint256" }],
+    outputs: [
+      { name: "author", type: "address" },
+      { name: "contentHash", type: "bytes32" },
+      { name: "createdAt", type: "uint64" },
+      { name: "retired", type: "bool" },
+    ],
+  },
+] as const;
+
 export class ViemChainAdapter implements ChainAdapter {
   readonly chainId: number;
   readonly streamAddress: Address;
   readonly settlerAddress: Address;
+  private readonly registryAddress: Address;
 
   private readonly pub: ReturnType<typeof createPublicClient>;
   private readonly wallet: ReturnType<typeof createWalletClient>;
@@ -53,6 +69,7 @@ export class ViemChainAdapter implements ChainAdapter {
   constructor(cfg: CollectorConfig) {
     this.chainId = cfg.chainId;
     this.streamAddress = cfg.streamAddress;
+    this.registryAddress = cfg.registryAddress;
     const account = privateKeyToAccount(cfg.settlerPrivateKey);
     this.account = account;
     this.settlerAddress = account.address;
@@ -116,6 +133,25 @@ export class ViemChainAdapter implements ChainAdapter {
       ratePerSec: BigInt(s.ratePerSec),
       open: Boolean(s.open),
     };
+  }
+
+  async getArticle(articleId: bigint): Promise<OnChainArticle | null> {
+    const raw = (await this.pub.readContract({
+      address: this.registryAddress,
+      abi: registryAbi,
+      functionName: "articles",
+      args: [articleId],
+    })) as unknown;
+
+    const t = raw as
+      | readonly [Address, Hex, bigint, boolean]
+      | { author: Address; contentHash: Hex; createdAt: bigint; retired: boolean };
+    const a = Array.isArray(t)
+      ? { author: t[0] as Address, contentHash: t[1] as Hex, retired: t[3] as boolean }
+      : (t as Exclude<typeof t, readonly unknown[]>);
+
+    if (a.author === zeroAddress) return null;
+    return { author: a.author, contentHash: a.contentHash, retired: Boolean(a.retired) };
   }
 
   async latestBlockTimestamp(): Promise<bigint> {

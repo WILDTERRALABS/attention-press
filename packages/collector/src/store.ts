@@ -19,6 +19,14 @@ interface BioRecord {
   updatedAt: number;
 }
 
+interface ArticleKeyRecord {
+  /** base64 AES-256 key. */
+  key: string;
+  /** Address that signed the key upload; verified against the on-chain author at release time. */
+  claimedAuthor: Address;
+  createdAt: number;
+}
+
 const bigMax = (a: bigint, b: bigint): bigint => (a > b ? a : b);
 const lc = (a: string | null | undefined): string => (a ?? "").toLowerCase();
 
@@ -38,6 +46,8 @@ export interface CollectorMetrics {
 export class VoucherStore {
   private sessions = new Map<string, SessionRecord>();
   private bios = new Map<string, BioRecord>();
+  /** keyed by lowercased contentHash */
+  private articleKeys = new Map<string, ArticleKeyRecord>();
   readonly metrics: CollectorMetrics = {
     vouchersReceived: 0,
     vouchersAccepted: 0,
@@ -163,11 +173,22 @@ export class VoucherStore {
     return this.bios.get(lc(address)) ?? { text: "", updatedAt: 0 };
   }
 
+  /** Register (or overwrite) the decryption key for an article, by its plaintext contentHash. */
+  setArticleKey(contentHash: Hex, key: string, claimedAuthor: Address): void {
+    this.articleKeys.set(lc(contentHash), { key, claimedAuthor, createdAt: Date.now() });
+  }
+
+  getArticleKey(contentHash: Hex): ArticleKeyRecord | undefined {
+    return this.articleKeys.get(lc(contentHash));
+  }
+
   snapshot(): void {
     if (!this.file) return;
     const out = {
-      version: 2 as const,
+      version: 3 as const,
       metrics: { ...this.metrics },
+      bios: Object.fromEntries(this.bios),
+      articleKeys: Object.fromEntries(this.articleKeys),
       sessions: Object.fromEntries(
         [...this.sessions].map(([id, r]) => [
           id,
@@ -181,7 +202,6 @@ export class VoucherStore {
           },
         ]),
       ),
-      bios: Object.fromEntries(this.bios),
     };
     writeFileSync(this.file, JSON.stringify(out, null, 2));
   }
@@ -209,8 +229,9 @@ export class VoucherStore {
         }
       >;
       bios?: Record<string, BioRecord>;
+      articleKeys?: Record<string, ArticleKeyRecord>;
     };
-    if (snap.version !== 1 && snap.version !== 2) return;
+    if (![1, 2, 3].includes(snap.version)) return;
     for (const [id, s] of Object.entries(snap.sessions)) {
       this.sessions.set(id, {
         latest: s.latest ? { ...s.latest, cumulativeAmount: BigInt(s.latest.cumulativeAmount) } : null,
@@ -222,6 +243,7 @@ export class VoucherStore {
       });
     }
     for (const [k, v] of Object.entries(snap.bios ?? {})) this.bios.set(k, v);
+    for (const [k, v] of Object.entries(snap.articleKeys ?? {})) this.articleKeys.set(k, v);
     Object.assign(this.metrics, snap.metrics ?? {});
   }
 }

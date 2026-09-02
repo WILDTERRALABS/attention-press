@@ -220,6 +220,111 @@ describe("profiles / bio", () => {
   });
 });
 
+describe("encrypted-article keys", () => {
+  const KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; // 44 chars -> 32 bytes
+  const CONTENT_HASH = ("0x" + "cc".repeat(32)) as `0x${string}`;
+
+  async function registerKey(author: ReturnType<typeof newAccount>, contentHash = CONTENT_HASH) {
+    const signature = await author.signMessage!({
+      message: `attention-press: register key for ${contentHash.toLowerCase()}`,
+    });
+    return app.inject({ method: "POST", url: "/articles/key", payload: { contentHash, key: KEY, signature } });
+  }
+
+  async function releaseKey(reader: ReturnType<typeof newAccount>, id: string, sessionId: string) {
+    const ts = Math.floor(Date.now() / 60_000);
+    const signature = await reader.signMessage!({
+      message: `attention-press: unlock article ${id} for ${reader.address.toLowerCase()} at ${ts}`,
+    });
+    return app.inject({
+      method: "POST",
+      url: `/articles/${id}/key`,
+      payload: { address: reader.address, sessionId, signature, timestamp: ts },
+    });
+  }
+
+  it("registers a key with an author signature", async () => {
+    const res = await registerKey(newAccount());
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("releases the key to the session reader for the right article", async () => {
+    const author = newAccount();
+    const reader = newAccount();
+    await registerKey(author);
+    chain.articles.set("7", { author: author.address, contentHash: CONTENT_HASH, retired: false });
+    chain.sessions.set(sid(), makeSession({ reader: reader.address, articleId: 7n, open: true }));
+
+    const res = await releaseKey(reader, "7", sid());
+    expect(res.statusCode).toBe(200);
+    expect(res.json().key).toBe(KEY);
+  });
+
+  it("403s when the session is closed", async () => {
+    const author = newAccount();
+    const reader = newAccount();
+    await registerKey(author);
+    chain.articles.set("7", { author: author.address, contentHash: CONTENT_HASH, retired: false });
+    chain.sessions.set(sid(), makeSession({ reader: reader.address, articleId: 7n, open: false }));
+    expect((await releaseKey(reader, "7", sid())).statusCode).toBe(403);
+  });
+
+  it("403s when the session is for a different article", async () => {
+    const author = newAccount();
+    const reader = newAccount();
+    await registerKey(author);
+    chain.articles.set("7", { author: author.address, contentHash: CONTENT_HASH, retired: false });
+    chain.sessions.set(sid(), makeSession({ reader: reader.address, articleId: 99n, open: true }));
+    expect((await releaseKey(reader, "7", sid())).statusCode).toBe(403);
+  });
+
+  it("403s when the caller is not the session reader", async () => {
+    const author = newAccount();
+    const reader = newAccount();
+    const attacker = newAccount();
+    await registerKey(author);
+    chain.articles.set("7", { author: author.address, contentHash: CONTENT_HASH, retired: false });
+    chain.sessions.set(sid(), makeSession({ reader: reader.address, articleId: 7n, open: true }));
+    expect((await releaseKey(attacker, "7", sid())).statusCode).toBe(403);
+  });
+
+  it("409s when the registered key's author != the on-chain author", async () => {
+    const notAuthor = newAccount();
+    const realAuthor = newAccount();
+    const reader = newAccount();
+    await registerKey(notAuthor); // squatter registered the key
+    chain.articles.set("7", { author: realAuthor.address, contentHash: CONTENT_HASH, retired: false });
+    chain.sessions.set(sid(), makeSession({ reader: reader.address, articleId: 7n, open: true }));
+    expect((await releaseKey(reader, "7", sid())).statusCode).toBe(409);
+  });
+
+  it("404s when no key was registered", async () => {
+    const author = newAccount();
+    const reader = newAccount();
+    chain.articles.set("7", { author: author.address, contentHash: CONTENT_HASH, retired: false });
+    chain.sessions.set(sid(), makeSession({ reader: reader.address, articleId: 7n, open: true }));
+    expect((await releaseKey(reader, "7", sid())).statusCode).toBe(404);
+  });
+
+  it("401s on a stale timestamp", async () => {
+    const author = newAccount();
+    const reader = newAccount();
+    await registerKey(author);
+    chain.articles.set("7", { author: author.address, contentHash: CONTENT_HASH, retired: false });
+    chain.sessions.set(sid(), makeSession({ reader: reader.address, articleId: 7n, open: true }));
+    const staleTs = Math.floor(Date.now() / 60_000) - 10;
+    const signature = await reader.signMessage!({
+      message: `attention-press: unlock article 7 for ${reader.address.toLowerCase()} at ${staleTs}`,
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/articles/7/key",
+      payload: { address: reader.address, sessionId: sid(), signature, timestamp: staleTs },
+    });
+    expect(res.statusCode).toBe(401);
+  });
+});
+
 describe("CORS", () => {
   it("answers the preflight for an allowed origin", async () => {
     const res = await app.inject({

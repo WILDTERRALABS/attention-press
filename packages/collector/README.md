@@ -55,6 +55,18 @@ Off-chain author bio (≤280 chars). `GET` → `{ address, text, updatedAt }`.
 `POST { address, text, signature }` stores it — `signature` must sign
 `attention-press: set bio for <address>\n\n<text>` from that address (401 otherwise).
 
+### `POST /articles/key` · `POST /articles/:id/key`  (content-gating key custody)
+- **Register** `{ contentHash, key, signature }` — the author uploads an article's
+  AES-256 key, keyed by the plaintext `contentHash`, signing
+  `attention-press: register key for <contentHash>`. Last write wins; verified
+  against the on-chain author only at release. **The operator can read any article
+  it holds a key for** — run your own collector for real confidentiality.
+- **Release** `{ address, sessionId, signature, timestamp }` — returns `{ key }`
+  only if `sessions(sessionId)` is open, `.reader == address`, `.articleId == id`,
+  the signature over `attention-press: unlock article <id> for <address> at <minute>`
+  recovers to `address` (≤5 min old), and the registered key's signer matches
+  `ArticleRegistry.authorOf(id)`. Otherwise 401/403/404/409.
+
 ### `GET /health` · `GET /metrics`
 Wiring + liveness, and counters (`vouchersReceived/Accepted/Rejected`,
 `settleSent/Failed`).

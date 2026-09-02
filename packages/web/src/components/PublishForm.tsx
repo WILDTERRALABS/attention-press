@@ -3,9 +3,18 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { decodeEventLog } from "viem";
-import { useAccount, usePublicClient, useWriteContract } from "wagmi";
-import { ARTICLE_REGISTRY, CHAIN_ID, DEFAULT_TIER_ID, RATE_TIERS, articleRegistryAbi, type RateTierId } from "@/lib/chain";
-import { MAX_BODY_CHARS, contentHashOf, encodeMetadataURI } from "@/lib/metadata";
+import { useAccount, usePublicClient, useSignMessage, useWriteContract } from "wagmi";
+import {
+  ARTICLE_REGISTRY,
+  CHAIN_ID,
+  COLLECTOR_URL,
+  DEFAULT_TIER_ID,
+  RATE_TIERS,
+  articleRegistryAbi,
+  type RateTierId,
+} from "@/lib/chain";
+import { encryptBody, randomKeyB64 } from "@/lib/crypto";
+import { MAX_BODY_CHARS, contentHashOf, encodeMetadataURI, previewOf } from "@/lib/metadata";
 import { costForMinutes, tierById } from "@/lib/rate";
 import { useHydrated } from "@/lib/useHydrated";
 
@@ -15,6 +24,7 @@ export function PublishForm() {
   const { isConnected, chainId, address } = useAccount();
   const publicClient = usePublicClient();
   const { writeContractAsync, isPending } = useWriteContract();
+  const { signMessageAsync } = useSignMessage();
 
   const [title, setTitle] = useState("");
   const [authorName, setAuthorName] = useState("");
@@ -34,17 +44,39 @@ export function PublishForm() {
   async function submit() {
     setError(null);
     try {
+      // contentHash still commits to the plaintext (integrity / authorship proof).
+      const contentHash = contentHashOf(body);
+
+      setStatus("Encrypting…");
+      const key = randomKeyB64();
+      const enc = await encryptBody(body, key);
       const meta = {
         title: title.trim(),
         authorName: authorName.trim() || undefined,
-        body,
         createdAt: Math.floor(Date.now() / 1000),
         ratePerMinute: tierById(tierId).perMinute,
+        preview: previewOf(body),
+        enc,
       };
       const uri = encodeMetadataURI(meta);
-      const contentHash = contentHashOf(body);
 
-      setStatus("Confirm in your wallet…");
+      // Register the key with the collector BEFORE publishing — so there's no
+      // "published but unreadable" gap if the author bails after the tx.
+      setStatus("Sign to register the decryption key…");
+      const keySig = await signMessageAsync({
+        message: `attention-press: register key for ${contentHash.toLowerCase()}`,
+      });
+      setStatus("Registering key with the content service…");
+      const keyRes = await fetch(`${COLLECTOR_URL}/articles/key`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ contentHash, key, signature: keySig }),
+      });
+      if (!keyRes.ok) {
+        throw new Error(`key registration failed: ${(await keyRes.json().catch(() => ({}))).reason ?? keyRes.status}`);
+      }
+
+      setStatus("Confirm the publish in your wallet…");
       const hash = await writeContractAsync({
         address: ARTICLE_REGISTRY,
         abi: articleRegistryAbi,
@@ -77,8 +109,9 @@ export function PublishForm() {
     <>
       <h1>Publish an article</h1>
       <p className="lede">
-        Title and body are stored as an on-chain data URI (v1 — no IPFS pin needed). Readers stream payment
-        per second while they read it.
+        The body is AES-encrypted before it goes on-chain; readers get the key only while a paid session is
+        open. A short preview stays public. <strong>The content service (collector) holds the key and can
+        technically read the article</strong> — run your own for full confidentiality.
       </p>
 
       {hydrated && !isConnected && <p className="notice">Connect your wallet to publish.</p>}

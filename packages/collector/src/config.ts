@@ -11,6 +11,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollectorConfi
   const streamAddress = required("ATTENTION_STREAM_ADDRESS");
   if (!isAddress(streamAddress)) throw new Error("ATTENTION_STREAM_ADDRESS is not a valid address");
 
+  const registryAddress = required("ARTICLE_REGISTRY_ADDRESS");
+  if (!isAddress(registryAddress)) throw new Error("ARTICLE_REGISTRY_ADDRESS is not a valid address");
+
   const settlerPrivateKey = required("SETTLER_PRIVATE_KEY");
   if (!isHex(settlerPrivateKey) || settlerPrivateKey.length !== 66) {
     throw new Error("SETTLER_PRIVATE_KEY must be 0x-prefixed 32-byte hex");
@@ -24,6 +27,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollectorConfi
     rpcUrl: required("RPC_URL"),
     chainId,
     streamAddress: streamAddress as Address,
+    registryAddress: registryAddress as Address,
     settlerPrivateKey: settlerPrivateKey as Hex,
     settleIntervalMs: Number(env.SETTLE_INTERVAL_MS ?? 30_000),
     minSettleDelta: BigInt(env.MIN_SETTLE_DELTA ?? "0"),

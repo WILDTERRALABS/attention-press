@@ -65,6 +65,7 @@ export function ArticleReader({ id }: { id: string }) {
       articleId={articleId}
       meta={meta}
       author={art[0]}
+      contentHash={art[1]}
       tokenAddress={token.data}
       tokenSymbol={symbol.data ?? "tokens"}
       tokenDecimals={decimals.data ?? 18}

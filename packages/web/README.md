@@ -5,18 +5,20 @@ Next.js frontend for attention-press.
 - **`/`** — discovery. Every article ranked by `AttentionStream.articleEarned` —
   real tokens streamed by readers, not clicks.
 - **`/publish`** — connect wallet, write Markdown, pick a pay-rate tier
-  (Casual / Standard / Deep), `ArticleRegistry.publish`. Stores
-  `{title, body, ratePerMinute}` as an on-chain `data:` URI;
-  `contentHash = keccak256(body)`. Tiers live in `src/lib/chain.ts`;
-  session budget = rate × 30 min.
+  (Casual / Standard / Deep). The body is **AES-256-GCM encrypted client-side**;
+  metadata stores `{title, preview, ratePerMinute, enc}` as an on-chain `data:`
+  URI, `contentHash = keccak256(plaintext)`. The key is registered with the
+  collector (author-signed) *before* the `publish` tx. **The collector operator
+  can decrypt** — self-host for confidentiality.
 - **`/profile/[address]`** — published articles + earnings; reader totals (from
   the collector); an editable bio (owner signs a message, no gas).
-- **`/article/[id]`** — renders the article and mounts `AttentionMeter` from
-  `@attention-press/reader-sdk`. A live **spend meter** shows tokens streamed,
-  engaged reading time, budget remaining and voucher count while you read.
-  Vouchers are POSTed to the collector at `NEXT_PUBLIC_COLLECTOR_URL`. The
-  payment token is **WMON**; if your WMON balance is below the session budget the
-  page offers a one-click **Wrap MON** (`WMON.deposit()`) using your native MON.
+- **`/article/[id]`** — public: title, byline, a short preview. On
+  `session:started` the reader signs a request, the collector releases the key
+  (checks `sessions(id)` is open + reader + articleId), and the body is decrypted
+  client-side and verified against `contentHash`; it re-locks and is wiped on
+  `session:ended`. Live **spend meter** for tokens streamed / engaged time /
+  budget while reading. Vouchers POST to `NEXT_PUBLIC_COLLECTOR_URL`. Payment
+  token is **WMON**; a one-click **Wrap MON** appears if your balance is short.
 
 ## Run
 

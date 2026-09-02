@@ -1,18 +1,24 @@
 import { keccak256, toBytes, type Hex } from "viem";
+import type { EncryptedBody } from "./crypto";
 
 /**
- * v1 storage: no external IPFS pin. Article metadata (title + markdown body) is
- * encoded as a `data:` URI and stored in `ArticleRegistry.metadataURI`, and
- * `contentHash` is `keccak256(body)`. Swap `encodeMetadataURI` for a real IPFS
- * pin + `ipfs://CID` when a pinning key is available (see README).
+ * Article metadata is a `data:` URI in `ArticleRegistry.metadataURI`. New
+ * articles carry an AES-GCM-encrypted body (`enc`) plus a plaintext `preview`;
+ * `contentHash` on-chain is still `keccak256(plaintext body)`. Older articles
+ * carry a plaintext `body` and are handled unchanged.
  */
 export interface ArticleMetadata {
   title: string;
-  body: string;
   authorName?: string;
   createdAt: number;
   /** WMON/min pay rate the author chose (string, e.g. "0.025"). Absent on pre-tier articles. */
   ratePerMinute?: string;
+  /** Encrypted body — present on gated articles. */
+  enc?: EncryptedBody;
+  /** Public teaser (first sentences of the plaintext). Present on gated articles. */
+  preview?: string;
+  /** Legacy plaintext body — present on pre-encryption articles only. */
+  body?: string;
 }
 
 const PREFIX = "data:application/json;base64,";
@@ -32,13 +38,18 @@ export function decodeMetadataURI(uri: string): ArticleMetadata | null {
           ? Buffer.from(b64, "base64").toString("utf8")
           : decodeURIComponent(escape(atob(b64)));
       const m = JSON.parse(json) as Partial<ArticleMetadata>;
-      if (typeof m.title !== "string" || typeof m.body !== "string") return null;
+      const hasBody = typeof m.body === "string";
+      const hasEnc =
+        !!m.enc && typeof m.enc === "object" && typeof m.enc.ct === "string" && typeof m.enc.iv === "string";
+      if (typeof m.title !== "string" || (!hasBody && !hasEnc)) return null;
       return {
         title: m.title,
-        body: m.body,
         authorName: m.authorName,
         createdAt: Number(m.createdAt ?? 0),
         ratePerMinute: typeof m.ratePerMinute === "string" ? m.ratePerMinute : undefined,
+        enc: hasEnc ? m.enc : undefined,
+        preview: typeof m.preview === "string" ? m.preview : undefined,
+        body: hasBody ? m.body : undefined,
       };
     }
     // Unknown scheme (e.g. a real ipfs:// URI) — caller should fetch it.
@@ -72,6 +83,13 @@ export function previewOf(body: string, maxSentences = 3, maxChars = 320): strin
   if (truncatedByChars) out = out.slice(0, maxChars).replace(/\s+\S*$/, "");
   if (truncatedByChars || sentences.length > maxSentences || out.length < plain.length) out += " …";
   return out;
+}
+
+/** Public teaser for a card / locked view: stored `preview`, else derived from a legacy `body`. */
+export function previewText(meta: ArticleMetadata): string {
+  if (meta.preview) return meta.preview;
+  if (meta.body) return previewOf(meta.body);
+  return "";
 }
 
 /** Rough guard so publish() calldata stays sane on testnet. */

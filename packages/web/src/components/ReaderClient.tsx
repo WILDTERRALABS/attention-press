@@ -4,12 +4,13 @@ import DOMPurify from "dompurify";
 import Link from "next/link";
 import { marked } from "marked";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAccount, useBalance, usePublicClient, useReadContract, useWriteContract } from "wagmi";
+import { useAccount, useBalance, usePublicClient, useReadContract, useSignMessage, useWriteContract } from "wagmi";
 import { AttentionMeter, type Eip1193Provider } from "@attention-press/reader-sdk";
 import { SpendMeter, type MeterSnapshot } from "@/components/SpendMeter";
 import { ATTENTION_STREAM, CHAIN_ID, COLLECTOR_URL, erc20Abi, monadTestnet } from "@/lib/chain";
+import { decryptBody } from "@/lib/crypto";
 import { formatUnits, shortAddress } from "@/lib/format";
-import { previewOf, type ArticleMetadata } from "@/lib/metadata";
+import { contentHashOf, previewText, type ArticleMetadata } from "@/lib/metadata";
 import { budgetFor, ratePerSecFromPerMinute, tierByPerMinute } from "@/lib/rate";
 import { useHydrated } from "@/lib/useHydrated";
 
@@ -30,6 +31,7 @@ export function ReaderClient({
   articleId,
   meta,
   author,
+  contentHash,
   tokenAddress,
   tokenSymbol,
   tokenDecimals,
@@ -37,6 +39,7 @@ export function ReaderClient({
   articleId: bigint;
   meta: ArticleMetadata;
   author: `0x${string}`;
+  contentHash: `0x${string}`;
   tokenAddress?: `0x${string}`;
   tokenSymbol: string;
   tokenDecimals: number;
@@ -44,26 +47,62 @@ export function ReaderClient({
   const hydrated = useHydrated();
   const { address, isConnected, chainId } = useAccount();
   const publicClient = usePublicClient();
+  const { signMessageAsync } = useSignMessage();
   const bodyRef = useRef<HTMLDivElement>(null);
   const meterRef = useRef<AttentionMeter | null>(null);
 
   const tier = tierByPerMinute(meta.ratePerMinute);
   const ratePerSec = ratePerSecFromPerMinute(tier.perMinute);
   const budget = budgetFor(ratePerSec);
+  const isEncrypted = !!meta.enc;
 
   const [snap, setSnap] = useState<MeterSnapshot>(() => makeInitialSnap(budget, ratePerSec));
   const [starting, setStarting] = useState(false);
-  // Soft paywall: full body only renders while a reading session is open.
+  // Paywall: full body renders only while a reading session is open. For encrypted
+  // articles it also requires the decryption key from the collector.
   const [unlocked, setUnlocked] = useState(false);
+  const [decrypted, setDecrypted] = useState<string | null>(null);
+  const [unlockErr, setUnlockErr] = useState<string | null>(null);
 
-  const preview = useMemo(() => previewOf(meta.body), [meta.body]);
+  const preview = useMemo(() => previewText(meta), [meta]);
+  const bodySource = isEncrypted ? decrypted : unlocked ? (meta.body ?? null) : null;
   const html = useMemo(() => {
-    if (!hydrated || !unlocked) return "";
-    const raw = marked.parse(meta.body, { async: false }) as string;
+    if (!hydrated || !bodySource) return "";
+    const raw = marked.parse(bodySource, { async: false }) as string;
     return DOMPurify.sanitize(raw);
-  }, [hydrated, unlocked, meta.body]);
+  }, [hydrated, bodySource]);
 
   const patch = useCallback((p: Partial<MeterSnapshot>) => setSnap((s) => ({ ...s, ...p })), []);
+
+  const unlockBody = useCallback(
+    async (sessionId: string) => {
+      if (!isEncrypted || !meta.enc || !address) return;
+      setUnlockErr(null);
+      try {
+        const ts = Math.floor(Date.now() / 60_000);
+        const signature = await signMessageAsync({
+          message: `attention-press: unlock article ${articleId} for ${address.toLowerCase()} at ${ts}`,
+        });
+        const res = await fetch(`${COLLECTOR_URL}/articles/${articleId}/key`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ address, sessionId, signature, timestamp: ts }),
+        });
+        if (!res.ok) {
+          throw new Error((await res.json().catch(() => ({}))).reason ?? `collector ${res.status}`);
+        }
+        const { key } = (await res.json()) as { key: string };
+        const plaintext = await decryptBody(meta.enc, key);
+        if (contentHashOf(plaintext) !== contentHash) {
+          throw new Error("content failed its on-chain integrity check");
+        }
+        setDecrypted(plaintext);
+      } catch (e) {
+        setUnlockErr(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [isEncrypted, meta.enc, address, articleId, contentHash, signMessageAsync],
+  );
 
   const start = useCallback(async () => {
     if (meterRef.current) return;
@@ -100,6 +139,7 @@ export function ReaderClient({
     meter.on("session:started", (e) => {
       setUnlocked(true);
       patch({ state: "reading", sessionId: e.sessionId, txHash: e.txHash, error: null });
+      void unlockBody(e.sessionId);
     });
     meter.on("voucher:signed", (e) =>
       patch({ streamed: e.cumulativeAmount, voucherCount: e.index + 1, engagedSeconds: e.engagedSeconds }),
@@ -108,6 +148,8 @@ export function ReaderClient({
     meter.on("session:resumed", (e) => patch({ state: "reading", pauseReason: null, engagedSeconds: e.engagedSeconds }));
     meter.on("session:ended", (e) => {
       setUnlocked(false);
+      setDecrypted(null);
+      setUnlockErr(null);
       patch({ state: "ended", streamed: e.finalCumulative, engagedSeconds: e.engagedSeconds });
     });
     meter.on("error", (e) =>
@@ -123,7 +165,7 @@ export function ReaderClient({
     } finally {
       setStarting(false);
     }
-  }, [articleId, patch, ratePerSec, budget]);
+  }, [articleId, patch, ratePerSec, budget, unlockBody]);
 
   const stop = useCallback(async () => {
     try {
@@ -244,15 +286,25 @@ export function ReaderClient({
       {/* Stable container so the engagement tracker keeps the same scroll target
           before and after unlock; children swap on session start/end. */}
       <div ref={bodyRef} className="article-body">
-        {unlocked ? (
+        {html ? (
           <div dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
           <div className="article-locked">
-            <p className="preview-text">{preview}</p>
-            <p className="lock-note">
-              🔒 The rest is locked. Start a reading session above to unlock the full article —
-              you pay the author only for the time you spend reading.
-            </p>
+            {preview && <p className="preview-text">{preview}</p>}
+            {unlocked && isEncrypted && !decrypted && !unlockErr && (
+              <p className="lock-note">Unlocking… approve the signature request in your wallet.</p>
+            )}
+            {unlockErr && (
+              <p className="notice err">
+                Couldn&apos;t unlock: {unlockErr}. The session is still open — you can stop it above.
+              </p>
+            )}
+            {!unlocked && (
+              <p className="lock-note">
+                🔒 The rest is locked. Start a reading session above to unlock the full article —
+                you pay the author only for the time you spend reading.
+              </p>
+            )}
           </div>
         )}
       </div>

@@ -71,6 +71,17 @@ describe("VoucherStore", () => {
     expect(s.getBio(AUTHOR.toUpperCase() as typeof AUTHOR).text).toBe("writes about slow reading");
   });
 
+  it("stores and reads an article key by contentHash (case-insensitive), last write wins", () => {
+    const s = new VoucherStore();
+    const ch = ("0x" + "ab".repeat(32)) as `0x${string}`;
+    expect(s.getArticleKey(ch)).toBeUndefined();
+    s.setArticleKey(ch, "k1", AUTHOR);
+    s.setArticleKey(ch, "k2", AUTHOR);
+    const rec = s.getArticleKey(ch.toUpperCase() as typeof ch);
+    expect(rec?.key).toBe("k2");
+    expect(rec?.claimedAuthor).toBe(AUTHOR);
+  });
+
   describe("with a data dir", () => {
     let dir: string;
     beforeEach(() => {
@@ -87,6 +98,7 @@ describe("VoucherStore", () => {
       a.markSettled(sid(), 200n);
       a.metrics.vouchersAccepted = 3;
       a.setBio(AUTHOR, "hello");
+      a.setArticleKey(("0x" + "ab".repeat(32)) as `0x${string}`, "k64", AUTHOR);
       a.snapshot();
 
       const b = new VoucherStore(dir);
@@ -97,6 +109,7 @@ describe("VoucherStore", () => {
       expect(b.earningsByAuthor(AUTHOR).pendingTotal).toBe("577");
       expect(b.readerStats(READER).sessionsOpened).toBe(1);
       expect(b.getBio(AUTHOR).text).toBe("hello");
+      expect(b.getArticleKey(("0x" + "ab".repeat(32)) as `0x${string}`)?.key).toBe("k64");
     });
   });
 });

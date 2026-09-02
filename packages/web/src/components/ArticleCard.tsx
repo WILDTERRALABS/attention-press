@@ -1,11 +1,14 @@
 import Link from "next/link";
 import type { ArticleView } from "@/lib/articles";
 import { formatSeconds, formatUnits, shortAddress } from "@/lib/format";
+import { previewText } from "@/lib/metadata";
 import { tierByPerMinute } from "@/lib/rate";
 
 export function ArticleCard({ a, tokenSymbol, tokenDecimals }: { a: ArticleView; tokenSymbol: string; tokenDecimals: number }) {
   const title = a.metadata?.title ?? `Article #${a.id}`;
-  const preview = a.metadata?.body.replace(/[#*_>`]/g, "").slice(0, 160) ?? "(metadata off-chain — open to load)";
+  const preview = a.metadata
+    ? previewText(a.metadata).slice(0, 180) || "🔒 Locked — open to read"
+    : "(metadata off-chain — open to load)";
   const avgPerReader = a.sessions > 0 ? Number(a.readerSeconds) / a.sessions : 0;
   const tier = tierByPerMinute(a.metadata?.ratePerMinute);
 
