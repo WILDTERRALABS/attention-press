@@ -6,9 +6,11 @@ import { decodeEventLog } from "viem";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 import { ARTICLE_REGISTRY, CHAIN_ID, articleRegistryAbi } from "@/lib/chain";
 import { MAX_BODY_CHARS, contentHashOf, encodeMetadataURI } from "@/lib/metadata";
+import { useHydrated } from "@/lib/useHydrated";
 
 export function PublishForm() {
   const router = useRouter();
+  const hydrated = useHydrated();
   const { isConnected, chainId, address } = useAccount();
   const publicClient = usePublicClient();
   const { writeContractAsync, isPending } = useWriteContract();
@@ -23,7 +25,7 @@ export function PublishForm() {
     if (address && !authorName) setAuthorName("");
   }, [address, authorName]);
 
-  const onChain = isConnected && chainId === CHAIN_ID;
+  const onChain = hydrated && isConnected && chainId === CHAIN_ID;
   const tooLong = body.length > MAX_BODY_CHARS;
   const canSubmit = onChain && title.trim() && body.trim() && !tooLong && !isPending;
 
@@ -71,8 +73,10 @@ export function PublishForm() {
         per second while they read it.
       </p>
 
-      {!isConnected && <p className="notice">Connect your wallet to publish.</p>}
-      {isConnected && chainId !== CHAIN_ID && <p className="notice">Switch to Monad Testnet to publish.</p>}
+      {hydrated && !isConnected && <p className="notice">Connect your wallet to publish.</p>}
+      {hydrated && isConnected && chainId !== CHAIN_ID && (
+        <p className="notice">Switch to Monad Testnet to publish.</p>
+      )}
 
       <label htmlFor="t">Title</label>
       <input id="t" type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="On slow reading" />

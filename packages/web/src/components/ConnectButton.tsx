@@ -3,17 +3,25 @@
 import { useAccount, useConnect, useDisconnect, useSwitchChain } from "wagmi";
 import { CHAIN_ID } from "@/lib/chain";
 import { shortAddress } from "@/lib/format";
+import { useHydrated } from "@/lib/useHydrated";
 
 export function ConnectButton() {
+  const hydrated = useHydrated();
   const { address, isConnected, chainId } = useAccount();
   const { connect, connectors, isPending } = useConnect();
   const { disconnect } = useDisconnect();
   const { switchChain } = useSwitchChain();
 
-  if (!isConnected) {
-    const injected = connectors[0];
+  const injected = connectors[0];
+
+  // Until mounted, render the same disconnected button the server produced.
+  if (!hydrated || !isConnected) {
     return (
-      <button className="btn" disabled={!injected || isPending} onClick={() => injected && connect({ connector: injected })}>
+      <button
+        className="btn"
+        disabled={!hydrated || !injected || isPending}
+        onClick={() => injected && connect({ connector: injected })}
+      >
         {isPending ? "Connecting…" : "Connect wallet"}
       </button>
     );

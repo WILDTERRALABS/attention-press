@@ -17,6 +17,7 @@ import {
 } from "@/lib/chain";
 import { formatUnits, shortAddress } from "@/lib/format";
 import type { ArticleMetadata } from "@/lib/metadata";
+import { useHydrated } from "@/lib/useHydrated";
 
 const initialSnap = (): MeterSnapshot => ({
   state: "idle",
@@ -46,21 +47,19 @@ export function ReaderClient({
   tokenSymbol: string;
   tokenDecimals: number;
 }) {
+  const hydrated = useHydrated();
   const { address, isConnected, chainId } = useAccount();
   const publicClient = usePublicClient();
   const bodyRef = useRef<HTMLDivElement>(null);
   const meterRef = useRef<AttentionMeter | null>(null);
   const [snap, setSnap] = useState<MeterSnapshot>(initialSnap);
   const [starting, setStarting] = useState(false);
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => setMounted(true), []);
 
   const html = useMemo(() => {
-    if (!mounted) return "";
+    if (!hydrated) return "";
     const raw = marked.parse(meta.body, { async: false }) as string;
     return DOMPurify.sanitize(raw);
-  }, [mounted, meta.body]);
+  }, [hydrated, meta.body]);
 
   const patch = useCallback((p: Partial<MeterSnapshot>) => setSnap((s) => ({ ...s, ...p })), []);
 
@@ -182,7 +181,7 @@ export function ReaderClient({
     }
   }, [tokenAddress, address, wrapAmount, writeContractAsync, publicClient, wmon, mon, patch]);
 
-  const onChain = isConnected && chainId === CHAIN_ID;
+  const onChain = hydrated && isConnected && chainId === CHAIN_ID;
   const canStart = onChain && enoughBalance;
 
   return (
@@ -193,8 +192,10 @@ export function ReaderClient({
         <code>{shortAddress(author)}</code>
       </p>
 
-      {!isConnected && <p className="notice">Connect your wallet to start a paid reading session.</p>}
-      {isConnected && chainId !== CHAIN_ID && <p className="notice">Switch to Monad Testnet.</p>}
+      {hydrated && !isConnected && (
+        <p className="notice">Connect your wallet to start a paid reading session.</p>
+      )}
+      {hydrated && isConnected && chainId !== CHAIN_ID && <p className="notice">Switch to Monad Testnet.</p>}
 
       {onChain && (
         <p className="notice" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
