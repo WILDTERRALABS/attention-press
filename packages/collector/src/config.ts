@@ -14,6 +14,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollectorConfi
   const registryAddress = required("ARTICLE_REGISTRY_ADDRESS");
   if (!isAddress(registryAddress)) throw new Error("ARTICLE_REGISTRY_ADDRESS is not a valid address");
 
+  const articleActionsAddress = required("ARTICLE_ACTIONS_ADDRESS");
+  if (!isAddress(articleActionsAddress)) throw new Error("ARTICLE_ACTIONS_ADDRESS is not a valid address");
+
   const settlerPrivateKey = required("SETTLER_PRIVATE_KEY");
   if (!isHex(settlerPrivateKey) || settlerPrivateKey.length !== 66) {
     throw new Error("SETTLER_PRIVATE_KEY must be 0x-prefixed 32-byte hex");
@@ -28,6 +31,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollectorConfi
     chainId,
     streamAddress: streamAddress as Address,
     registryAddress: registryAddress as Address,
+    articleActionsAddress: articleActionsAddress as Address,
     settlerPrivateKey: settlerPrivateKey as Hex,
     settleIntervalMs: Number(env.SETTLE_INTERVAL_MS ?? 30_000),
     minSettleDelta: BigInt(env.MIN_SETTLE_DELTA ?? "0"),
@@ -37,5 +41,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollectorConfi
       .split(",")
       .map((o) => o.trim())
       .filter(Boolean),
+    articleActionsFromBlock: BigInt(env.ARTICLE_ACTIONS_FROM_BLOCK ?? "0"),
+    replyIndexIntervalMs: Number(env.REPLY_INDEX_INTERVAL_MS ?? 15_000),
+    logQueryRange: Number(env.LOG_QUERY_RANGE ?? 10_000),
   };
 }

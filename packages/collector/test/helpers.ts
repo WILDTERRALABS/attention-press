@@ -1,6 +1,6 @@
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import type { Account, Address, Hex } from "viem";
-import type { ChainAdapter, OnChainArticle, OnChainSession } from "../src/types.js";
+import type { ChainAdapter, OnChainArticle, OnChainSession, RepliedLog } from "../src/types.js";
 import { VOUCHER_TYPES, voucherDomain } from "../src/voucher.js";
 
 export const STREAM = "0x00000000000000000000000000000000000000AA" as Address;
@@ -45,6 +45,21 @@ export function makeSession(over: Partial<OnChainSession> = {}): OnChainSession 
   };
 }
 
+export function makeRepliedLog(over: Partial<RepliedLog> = {}): RepliedLog {
+  return {
+    articleId: 1n,
+    actor: "0x5555555555555555555555555555555555555555",
+    index: 0n,
+    toAuthor: 1_950_000_000_000_000_000n,
+    fee: 50_000_000_000_000_000n,
+    text: "a reply",
+    blockNumber: 100n,
+    txHash: ("0x" + "ab".repeat(32)) as Hex,
+    logIndex: 0,
+    ...over,
+  };
+}
+
 export class FakeChain implements ChainAdapter {
   readonly chainId = CHAIN_ID;
   readonly streamAddress = STREAM;
@@ -56,6 +71,15 @@ export class FakeChain implements ChainAdapter {
   settleCalls: Array<{ id: Hex; amount: bigint; sig: Hex }> = [];
   settleError: Error | null = null;
   blockError: Error | null = null;
+
+  // --- reply indexer fakes ---
+  head = 1_000n;
+  repliedLogs: RepliedLog[] = [];
+  /** getRepliedLogs throws if (toBlock - fromBlock + 1) exceeds this. */
+  maxLogRange = Number.POSITIVE_INFINITY;
+  getLogsCalls: Array<{ from: bigint; to: bigint }> = [];
+  blockTimes = new Map<bigint, bigint>();
+  blockTimeCalls: bigint[] = [];
 
   async getSession(id: Hex): Promise<OnChainSession | null> {
     return this.sessions.get(id) ?? null;
@@ -76,5 +100,24 @@ export class FakeChain implements ChainAdapter {
     const s = this.sessions.get(id);
     if (s) s.claimed = amount;
     return ("0x" + "cc".repeat(32)) as Hex;
+  }
+
+  async latestBlockNumber(): Promise<bigint> {
+    return this.head;
+  }
+
+  async getRepliedLogs(fromBlock: bigint, toBlock: bigint): Promise<RepliedLog[]> {
+    this.getLogsCalls.push({ from: fromBlock, to: toBlock });
+    if (Number(toBlock - fromBlock + 1n) > this.maxLogRange) {
+      throw new Error(`range ${fromBlock}-${toBlock} exceeds provider limit`);
+    }
+    return this.repliedLogs
+      .filter((l) => l.blockNumber >= fromBlock && l.blockNumber <= toBlock)
+      .sort((a, b) => (a.blockNumber === b.blockNumber ? a.logIndex - b.logIndex : Number(a.blockNumber - b.blockNumber)));
+  }
+
+  async getBlockTimestamp(blockNumber: bigint): Promise<bigint> {
+    this.blockTimeCalls.push(blockNumber);
+    return this.blockTimes.get(blockNumber) ?? 1_700_000_000n + blockNumber;
   }
 }

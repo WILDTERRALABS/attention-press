@@ -14,5 +14,6 @@
   "treasury": "0x67dEf124555dDAABb406D4c79e65218F952f3668",
   "actionFeeBps": 250,
   "actionsTreasury": "0x67dEf124555dDAABb406D4c79e65218F952f3668",
-  "actionsDeployedAt": "2026-09-02T08:45:35.376Z"
+  "actionsDeployedAt": "2026-09-02T08:45:35.376Z",
+  "actionsDeployBlock": 59017209
 }

@@ -130,6 +130,42 @@ export function registerRoutes(app: FastifyInstance, ctx: ServerContext): void {
     return ctx.store.readerStats(address as Address);
   });
 
+  // Paginated replies for an article, indexed from ArticleActions.Replied logs.
+  // ?order=asc|desc (default asc = chronological), ?cursor=<offset>, ?limit=1..200 (default 50)
+  app.get<{
+    Params: { id: string };
+    Querystring: { order?: string; cursor?: string; limit?: string };
+  }>("/articles/:id/replies", async (req, reply) => {
+    const id = req.params.id;
+    if (!/^\d+$/.test(id)) return reply.code(400).send({ ok: false, reason: "bad article id" });
+
+    const order = req.query.order === "desc" ? "desc" : "asc";
+    if (req.query.order && req.query.order !== "asc" && req.query.order !== "desc") {
+      return reply.code(400).send({ ok: false, reason: "order must be asc or desc" });
+    }
+    const rawLimit = req.query.limit;
+    if (rawLimit !== undefined && (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 200)) {
+      return reply.code(400).send({ ok: false, reason: "limit must be 1..200" });
+    }
+    const rawCursor = req.query.cursor;
+    if (rawCursor !== undefined && !/^\d+$/.test(rawCursor)) {
+      return reply.code(400).send({ ok: false, reason: "cursor must be a non-negative integer" });
+    }
+
+    const page = ctx.store.repliesFor(id, {
+      order,
+      cursor: rawCursor ? Number(rawCursor) : 0,
+      limit: rawLimit ? Number(rawLimit) : 50,
+    });
+    return {
+      articleId: id,
+      order,
+      total: page.total,
+      nextCursor: page.nextCursor,
+      replies: page.items,
+    };
+  });
+
   app.get<{ Params: { address: string } }>("/profiles/:address", async (req, reply) => {
     const address = req.params.address;
     if (!isAddress(address)) return reply.code(400).send({ ok: false, reason: "bad address" });

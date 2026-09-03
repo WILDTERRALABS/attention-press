@@ -164,6 +164,63 @@ describe("GET /readers/:address/stats", () => {
   });
 });
 
+describe("GET /articles/:id/replies", () => {
+  const mkReply = (index: number, over: Record<string, unknown> = {}) => ({
+    articleId: "9",
+    index,
+    actor: "0x5555555555555555555555555555555555555555" as const,
+    text: `reply ${index}`,
+    toAuthor: "1950000000000000000",
+    fee: "50000000000000000",
+    blockNumber: 100 + index,
+    blockTime: 1_788_000_000 + index,
+    txHash: ("0x" + "ab".repeat(32)) as `0x${string}`,
+    ...over,
+  });
+
+  it("returns indexed replies chronologically with a total", async () => {
+    for (let i = 0; i < 3; i++) store.addReply(mkReply(i));
+    const res = await app.inject({ method: "GET", url: "/articles/9/replies" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toMatchObject({ articleId: "9", order: "asc", total: 3, nextCursor: null });
+    expect(body.replies.map((r: { text: string }) => r.text)).toEqual(["reply 0", "reply 1", "reply 2"]);
+    expect(body.replies[0]).toMatchObject({ index: 0, actor: mkReply(0).actor, blockTime: 1_788_000_000 });
+  });
+
+  it("reverses with ?order=desc", async () => {
+    for (let i = 0; i < 3; i++) store.addReply(mkReply(i));
+    const res = await app.inject({ method: "GET", url: "/articles/9/replies?order=desc" });
+    expect(res.json().replies.map((r: { text: string }) => r.text)).toEqual(["reply 2", "reply 1", "reply 0"]);
+  });
+
+  it("paginates with cursor + limit and reports nextCursor", async () => {
+    for (let i = 0; i < 5; i++) store.addReply(mkReply(i));
+    const p1 = (await app.inject({ method: "GET", url: "/articles/9/replies?limit=2" })).json();
+    expect(p1.replies).toHaveLength(2);
+    expect(p1.nextCursor).toBe(2);
+    const p2 = (await app.inject({ method: "GET", url: `/articles/9/replies?limit=2&cursor=${p1.nextCursor}` })).json();
+    expect(p2.replies.map((r: { text: string }) => r.text)).toEqual(["reply 2", "reply 3"]);
+    const p3 = (await app.inject({ method: "GET", url: "/articles/9/replies?limit=2&cursor=4" })).json();
+    expect(p3.replies).toHaveLength(1);
+    expect(p3.nextCursor).toBeNull();
+  });
+
+  it("returns an empty list for an article with no indexed replies", async () => {
+    const res = await app.inject({ method: "GET", url: "/articles/12345/replies" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ total: 0, replies: [], nextCursor: null });
+  });
+
+  it("400s on a bad id, bad order, or out-of-range limit", async () => {
+    expect((await app.inject({ method: "GET", url: "/articles/abc/replies" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/articles/9/replies?order=sideways" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/articles/9/replies?limit=0" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/articles/9/replies?limit=500" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/articles/9/replies?cursor=-1" })).statusCode).toBe(400);
+  });
+});
+
 describe("profiles / bio", () => {
   it("stores a bio with a valid wallet signature and reads it back", async () => {
     const acct = newAccount();

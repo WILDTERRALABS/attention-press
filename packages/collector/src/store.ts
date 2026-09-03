@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Address, Hex } from "viem";
-import type { StoredVoucher, VoucherInput } from "./types.js";
+import type { ReplyPage, ReplyRecord, StoredVoucher, VoucherInput } from "./types.js";
 
 interface SessionRecord {
   latest: StoredVoucher | null;
@@ -48,6 +48,10 @@ export class VoucherStore {
   private bios = new Map<string, BioRecord>();
   /** keyed by lowercased contentHash */
   private articleKeys = new Map<string, ArticleKeyRecord>();
+  /** keyed by decimal articleId; each list kept sorted ascending by `index` */
+  private replies = new Map<string, ReplyRecord[]>();
+  /** highest block fully scanned by the reply indexer */
+  private replyCursor = 0n;
   readonly metrics: CollectorMetrics = {
     vouchersReceived: 0,
     vouchersAccepted: 0,
@@ -189,13 +193,62 @@ export class VoucherStore {
     return this.articleKeys.get(lc(contentHash));
   }
 
+  // ---- reply index -------------------------------------------------------------
+
+  /**
+   * Add one indexed reply. Idempotent by `(articleId, index)` — re-scanning an
+   * overlapping block range or restarting never double-counts. Returns whether
+   * the reply was newly added.
+   */
+  addReply(r: ReplyRecord): boolean {
+    const arr = this.replies.get(r.articleId) ?? [];
+    let i = arr.length;
+    while (i > 0) {
+      const prev = arr[i - 1]!;
+      if (prev.index === r.index) return false;
+      if (prev.index < r.index) break;
+      i--;
+    }
+    arr.splice(i, 0, r);
+    this.replies.set(r.articleId, arr);
+    return true;
+  }
+
+  replyCount(articleId: string): number {
+    return this.replies.get(articleId)?.length ?? 0;
+  }
+
+  /** Page of replies for an article. `order` "asc" = chronological (default). */
+  repliesFor(
+    articleId: string,
+    opts: { order?: "asc" | "desc"; cursor?: number; limit?: number } = {},
+  ): ReplyPage {
+    const all = this.replies.get(articleId) ?? [];
+    const ordered = opts.order === "desc" ? [...all].reverse() : all;
+    const cursor = Math.max(0, Math.floor(opts.cursor ?? 0));
+    const limit = Math.min(200, Math.max(1, Math.floor(opts.limit ?? 50)));
+    const items = ordered.slice(cursor, cursor + limit);
+    const consumed = cursor + items.length;
+    return { items, total: ordered.length, nextCursor: consumed < ordered.length ? consumed : null };
+  }
+
+  getReplyCursor(): bigint {
+    return this.replyCursor;
+  }
+
+  setReplyCursor(block: bigint): void {
+    if (block > this.replyCursor) this.replyCursor = block;
+  }
+
   snapshot(): void {
     if (!this.file) return;
     const out = {
-      version: 3 as const,
+      version: 4 as const,
       metrics: { ...this.metrics },
       bios: Object.fromEntries(this.bios),
       articleKeys: Object.fromEntries(this.articleKeys),
+      replies: Object.fromEntries(this.replies),
+      replyCursorBlock: this.replyCursor.toString(),
       sessions: Object.fromEntries(
         [...this.sessions].map(([id, r]) => [
           id,
@@ -237,8 +290,10 @@ export class VoucherStore {
       >;
       bios?: Record<string, BioRecord>;
       articleKeys?: Record<string, ArticleKeyRecord>;
+      replies?: Record<string, ReplyRecord[]>;
+      replyCursorBlock?: string;
     };
-    if (![1, 2, 3].includes(snap.version)) return;
+    if (![1, 2, 3, 4].includes(snap.version)) return;
     for (const [id, s] of Object.entries(snap.sessions)) {
       this.sessions.set(id, {
         latest: s.latest ? { ...s.latest, cumulativeAmount: BigInt(s.latest.cumulativeAmount) } : null,
@@ -251,6 +306,10 @@ export class VoucherStore {
     }
     for (const [k, v] of Object.entries(snap.bios ?? {})) this.bios.set(k, v);
     for (const [k, v] of Object.entries(snap.articleKeys ?? {})) this.articleKeys.set(k, v);
+    for (const [k, v] of Object.entries(snap.replies ?? {})) {
+      this.replies.set(k, [...v].sort((a, b) => a.index - b.index));
+    }
+    if (snap.replyCursorBlock) this.replyCursor = BigInt(snap.replyCursorBlock);
     Object.assign(this.metrics, snap.metrics ?? {});
   }
 }

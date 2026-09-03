@@ -8,7 +8,13 @@ import {
   type PrivateKeyAccount,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import type { ChainAdapter, CollectorConfig, OnChainArticle, OnChainSession } from "./types.js";
+import type {
+  ChainAdapter,
+  CollectorConfig,
+  OnChainArticle,
+  OnChainSession,
+  RepliedLog,
+} from "./types.js";
 
 export const streamAbi = [
   {
@@ -56,11 +62,25 @@ export const registryAbi = [
   },
 ] as const;
 
+export const repliedEvent = {
+  type: "event",
+  name: "Replied",
+  inputs: [
+    { name: "articleId", type: "uint256", indexed: true },
+    { name: "actor", type: "address", indexed: true },
+    { name: "index", type: "uint256", indexed: true },
+    { name: "toAuthor", type: "uint256", indexed: false },
+    { name: "fee", type: "uint256", indexed: false },
+    { name: "text", type: "string", indexed: false },
+  ],
+} as const;
+
 export class ViemChainAdapter implements ChainAdapter {
   readonly chainId: number;
   readonly streamAddress: Address;
   readonly settlerAddress: Address;
   private readonly registryAddress: Address;
+  private readonly articleActionsAddress: Address;
 
   private readonly pub: ReturnType<typeof createPublicClient>;
   private readonly wallet: ReturnType<typeof createWalletClient>;
@@ -70,6 +90,7 @@ export class ViemChainAdapter implements ChainAdapter {
     this.chainId = cfg.chainId;
     this.streamAddress = cfg.streamAddress;
     this.registryAddress = cfg.registryAddress;
+    this.articleActionsAddress = cfg.articleActionsAddress;
     const account = privateKeyToAccount(cfg.settlerPrivateKey);
     this.account = account;
     this.settlerAddress = account.address;
@@ -156,6 +177,45 @@ export class ViemChainAdapter implements ChainAdapter {
 
   async latestBlockTimestamp(): Promise<bigint> {
     const block = await this.pub.getBlock({ blockTag: "latest" });
+    return block.timestamp;
+  }
+
+  async latestBlockNumber(): Promise<bigint> {
+    return this.pub.getBlockNumber();
+  }
+
+  async getRepliedLogs(fromBlock: bigint, toBlock: bigint): Promise<RepliedLog[]> {
+    const logs = await this.pub.getLogs({
+      address: this.articleActionsAddress,
+      event: repliedEvent,
+      fromBlock,
+      toBlock,
+    });
+    return logs.map((l) => {
+      const a = l.args as {
+        articleId?: bigint;
+        actor?: Address;
+        index?: bigint;
+        toAuthor?: bigint;
+        fee?: bigint;
+        text?: string;
+      };
+      return {
+        articleId: a.articleId ?? 0n,
+        actor: (a.actor ?? zeroAddress) as Address,
+        index: a.index ?? 0n,
+        toAuthor: a.toAuthor ?? 0n,
+        fee: a.fee ?? 0n,
+        text: a.text ?? "",
+        blockNumber: l.blockNumber ?? 0n,
+        txHash: l.transactionHash ?? (("0x" + "00".repeat(32)) as Hex),
+        logIndex: l.logIndex ?? 0,
+      };
+    });
+  }
+
+  async getBlockTimestamp(blockNumber: bigint): Promise<bigint> {
+    const block = await this.pub.getBlock({ blockNumber });
     return block.timestamp;
   }
 

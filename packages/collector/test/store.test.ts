@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { VoucherStore } from "../src/store.js";
+import type { ReplyRecord } from "../src/types.js";
 import { sid } from "./helpers.js";
 
 const AUTHOR = "0x3333333333333333333333333333333333333333" as const;
@@ -82,6 +83,82 @@ describe("VoucherStore", () => {
     expect(rec?.claimedAuthor).toBe(AUTHOR);
   });
 
+  describe("replies", () => {
+    const mkReply = (over: Partial<ReplyRecord> = {}): ReplyRecord => ({
+      articleId: "1",
+      index: 0,
+      actor: "0x5555555555555555555555555555555555555555",
+      text: "hi",
+      toAuthor: "1950000000000000000",
+      fee: "50000000000000000",
+      blockNumber: 100,
+      blockTime: 1_788_000_000,
+      txHash: ("0x" + "ab".repeat(32)) as `0x${string}`,
+      ...over,
+    });
+
+    it("addReply is idempotent by (articleId, index) and returns whether it was new", () => {
+      const s = new VoucherStore();
+      expect(s.addReply(mkReply({ index: 0 }))).toBe(true);
+      expect(s.addReply(mkReply({ index: 1, text: "second" }))).toBe(true);
+      expect(s.addReply(mkReply({ index: 0, text: "dup" }))).toBe(false);
+      expect(s.replyCount("1")).toBe(2);
+      expect(s.repliesFor("1").items.map((r) => r.text)).toEqual(["hi", "second"]);
+    });
+
+    it("keeps replies sorted by index even if added out of order", () => {
+      const s = new VoucherStore();
+      s.addReply(mkReply({ index: 2, text: "c" }));
+      s.addReply(mkReply({ index: 0, text: "a" }));
+      s.addReply(mkReply({ index: 1, text: "b" }));
+      expect(s.repliesFor("1").items.map((r) => r.text)).toEqual(["a", "b", "c"]);
+    });
+
+    it("paginates asc and desc with a next cursor", () => {
+      const s = new VoucherStore();
+      for (let i = 0; i < 5; i++) s.addReply(mkReply({ index: i, text: `r${i}` }));
+
+      const p1 = s.repliesFor("1", { order: "asc", cursor: 0, limit: 2 });
+      expect(p1.items.map((r) => r.text)).toEqual(["r0", "r1"]);
+      expect(p1.total).toBe(5);
+      expect(p1.nextCursor).toBe(2);
+
+      const p2 = s.repliesFor("1", { order: "asc", cursor: p1.nextCursor!, limit: 2 });
+      expect(p2.items.map((r) => r.text)).toEqual(["r2", "r3"]);
+      expect(p2.nextCursor).toBe(4);
+
+      const p3 = s.repliesFor("1", { order: "asc", cursor: p2.nextCursor!, limit: 2 });
+      expect(p3.items.map((r) => r.text)).toEqual(["r4"]);
+      expect(p3.nextCursor).toBeNull();
+
+      const d = s.repliesFor("1", { order: "desc", cursor: 0, limit: 2 });
+      expect(d.items.map((r) => r.text)).toEqual(["r4", "r3"]);
+    });
+
+    it("clamps limit to 1..200 and cursor to >= 0", () => {
+      const s = new VoucherStore();
+      for (let i = 0; i < 3; i++) s.addReply(mkReply({ index: i }));
+      expect(s.repliesFor("1", { limit: 0 }).items).toHaveLength(1);
+      expect(s.repliesFor("1", { limit: 9999 }).items).toHaveLength(3);
+      expect(s.repliesFor("1", { cursor: -5, limit: 1 }).items).toHaveLength(1);
+    });
+
+    it("returns an empty page for an article with no replies", () => {
+      const s = new VoucherStore();
+      expect(s.repliesFor("42")).toEqual({ items: [], total: 0, nextCursor: null });
+      expect(s.replyCount("42")).toBe(0);
+    });
+
+    it("reply cursor only advances forward", () => {
+      const s = new VoucherStore();
+      s.setReplyCursor(100n);
+      s.setReplyCursor(50n);
+      expect(s.getReplyCursor()).toBe(100n);
+      s.setReplyCursor(200n);
+      expect(s.getReplyCursor()).toBe(200n);
+    });
+  });
+
   describe("with a data dir", () => {
     let dir: string;
     beforeEach(() => {
@@ -110,6 +187,30 @@ describe("VoucherStore", () => {
       expect(b.readerStats(READER).sessionsOpened).toBe(1);
       expect(b.getBio(AUTHOR).text).toBe("hello");
       expect(b.getArticleKey(("0x" + "ab".repeat(32)) as `0x${string}`)?.key).toBe("k64");
+    });
+
+    it("round-trips the reply index and cursor through a v4 snapshot", () => {
+      const a = new VoucherStore(dir);
+      a.addReply({
+        articleId: "7",
+        index: 0,
+        actor: "0x5555555555555555555555555555555555555555",
+        text: "persisted reply",
+        toAuthor: "1950000000000000000",
+        fee: "50000000000000000",
+        blockNumber: 123,
+        blockTime: 1_788_111_111,
+        txHash: ("0x" + "cd".repeat(32)) as `0x${string}`,
+      });
+      a.setReplyCursor(59_100_000n);
+      a.snapshot();
+
+      const b = new VoucherStore(dir);
+      expect(b.getReplyCursor()).toBe(59_100_000n);
+      expect(b.replyCount("7")).toBe(1);
+      const first = b.repliesFor("7").items[0]!;
+      expect(first.text).toBe("persisted reply");
+      expect(b.addReply({ ...first })).toBe(false); // dedupe survives reload
     });
   });
 });

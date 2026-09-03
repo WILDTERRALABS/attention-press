@@ -1,13 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseUnits } from "viem";
-import { useAccount, usePublicClient } from "wagmi";
+import { useAccount } from "wagmi";
 import {
   ACTION_PRICES,
   ARTICLE_ACTIONS,
-  articleActionsAbi,
   CHAIN_ID,
+  COLLECTOR_URL,
   MAX_REPLY_BYTES,
   MIN_ALLOWANCE_ACTIONS,
   STANDING_ALLOWANCE_ACTIONS,
@@ -18,14 +18,15 @@ import { formatUnits, shortAddress } from "@/lib/format";
 import { useHydrated } from "@/lib/useHydrated";
 
 interface ReplyRow {
-  index: bigint;
+  index: number;
   actor: `0x${string}`;
   text: string;
-  block: bigint;
+  blockNumber: number;
+  blockTime: number;
 }
 
-const LOG_CHUNK = 100n; // Monad caps eth_getLogs at 100 blocks
-const LOG_LOOKBACK = 500n;
+const REPLY_PAGE = 50;
+const REPLY_POLL_MS = 20_000; // ~matches the collector's reply-index interval
 
 export function ArticleActions({
   articleId,
@@ -40,7 +41,6 @@ export function ArticleActions({
 }) {
   const hydrated = useHydrated();
   const { address, isConnected, chainId } = useAccount();
-  const publicClient = usePublicClient();
   const state = useArticleActions(articleId, address);
   const send = useSendAction();
 
@@ -48,7 +48,14 @@ export function ArticleActions({
   const [err, setErr] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
   const [tipAmount, setTipAmount] = useState("1");
+  // Replies come from the collector's reply index (GET /articles/:id/replies),
+  // chronological, paginated. `null` = the collector was unreachable.
   const [replies, setReplies] = useState<ReplyRow[] | null>(null);
+  const [replyTotal, setReplyTotal] = useState(0);
+  const [replyCursor, setReplyCursor] = useState<number | null>(null);
+  const [loadingReplies, setLoadingReplies] = useState(false);
+  // Just-posted replies shown until the indexer catches up (dedup by index).
+  const optimistic = useRef<ReplyRow[]>([]);
 
   const onChain = hydrated && isConnected && chainId === CHAIN_ID;
   const isAuthor = !!address && address.toLowerCase() === author.toLowerCase();
@@ -71,8 +78,21 @@ export function ArticleActions({
         await send(call, cost, state.allowance);
         state.refetch();
         if (call.functionName === "reply") {
+          const text = replyText;
           setReplyText("");
-          void loadReplies();
+          if (address) {
+            optimistic.current = [
+              ...optimistic.current,
+              {
+                index: Number(state.counts.reply),
+                actor: address,
+                text,
+                blockNumber: 0,
+                blockTime: Math.floor(Date.now() / 1000),
+              },
+            ];
+          }
+          setTimeout(() => void fetchReplies(0), 4000);
         }
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e));
@@ -81,42 +101,51 @@ export function ArticleActions({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [send, state.allowance, state.refetch],
+    [send, state.allowance, state.refetch, state.counts.reply, replyText, address],
   );
 
-  const loadReplies = useCallback(async () => {
-    if (!publicClient || !ARTICLE_ACTIONS) return;
-    try {
-      const latest = await publicClient.getBlockNumber();
-      const start = latest > LOG_LOOKBACK ? latest - LOG_LOOKBACK : 0n;
-      const abiEvent = articleActionsAbi.find((x) => x.type === "event" && x.name === "Replied");
-      const out: ReplyRow[] = [];
-      for (let from = start; from <= latest; from += LOG_CHUNK) {
-        const to = from + LOG_CHUNK - 1n > latest ? latest : from + LOG_CHUNK - 1n;
-        const logs = await publicClient.getLogs({
-          address: ARTICLE_ACTIONS,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          event: abiEvent as any,
-          args: { articleId },
-          fromBlock: from,
-          toBlock: to,
-        });
-        for (const l of logs) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const a = (l as any).args as { index: bigint; actor: `0x${string}`; text: string };
-          out.push({ index: a.index, actor: a.actor, text: a.text, block: l.blockNumber ?? 0n });
-        }
+  const fetchReplies = useCallback(
+    async (cursor = 0, append = false) => {
+      if (!ARTICLE_ACTIONS) return;
+      setLoadingReplies(true);
+      try {
+        const res = await fetch(
+          `${COLLECTOR_URL}/articles/${articleId}/replies?order=asc&limit=${REPLY_PAGE}&cursor=${cursor}`,
+        );
+        if (!res.ok) throw new Error(`collector ${res.status}`);
+        const body = (await res.json()) as {
+          total: number;
+          nextCursor: number | null;
+          replies: ReplyRow[];
+        };
+        setReplyTotal(body.total);
+        setReplyCursor(body.nextCursor);
+        setReplies((prev) => (append && prev ? [...prev, ...body.replies] : body.replies));
+        // drop any optimistic entries the indexer has now picked up
+        const seen = new Set(body.replies.map((r) => r.index));
+        optimistic.current = optimistic.current.filter(
+          (o) => !seen.has(o.index) && Date.now() / 1000 - o.blockTime < 120,
+        );
+      } catch {
+        if (!append) setReplies((prev) => prev ?? null); // unreachable; count above is authoritative
+      } finally {
+        setLoadingReplies(false);
       }
-      out.sort((x, y) => (y.index > x.index ? 1 : y.index < x.index ? -1 : 0));
-      setReplies(out);
-    } catch {
-      setReplies(null); // best-effort; the counter above is still authoritative
-    }
-  }, [publicClient, articleId]);
+    },
+    [articleId],
+  );
 
   useEffect(() => {
-    void loadReplies();
-  }, [loadReplies]);
+    void fetchReplies(0);
+    const iv = setInterval(() => void fetchReplies(0), REPLY_POLL_MS);
+    return () => clearInterval(iv);
+  }, [fetchReplies]);
+
+  const shownReplies = useMemo(() => {
+    const base = replies ?? [];
+    const have = new Set(base.map((r) => r.index));
+    return [...base, ...optimistic.current.filter((o) => !have.has(o.index))];
+  }, [replies]);
 
   const tipCost = useMemo(() => {
     try {
@@ -242,25 +271,35 @@ export function ArticleActions({
       {err && <p className="notice err">{err}</p>}
 
       <div className="replies">
-        <h3>Replies · {state.counts.reply.toString()}</h3>
+        <h3>Replies · {replies === null ? state.counts.reply.toString() : replyTotal}</h3>
         {replies === null ? (
-          <p className="muted">Couldn&apos;t load recent replies from the public RPC — the count above is on-chain truth.</p>
-        ) : replies.length === 0 ? (
-          <p className="muted">No replies in the last {LOG_LOOKBACK.toString()} blocks.</p>
-        ) : (
-          <ul>
-            {replies.map((r) => (
-              <li key={r.index.toString()}>
-                <code>{shortAddress(r.actor)}</code> <span className="muted">#{r.index.toString()}</span>
-                <p>{r.text}</p>
-              </li>
-            ))}
-          </ul>
-        )}
-        {state.counts.reply > BigInt(replies?.length ?? 0) && replies !== null && (
-          <p className="muted" style={{ fontSize: 13 }}>
-            Older replies aren&apos;t shown — full history needs the collector index.
+          <p className="muted">
+            Couldn&apos;t reach the reply index — {state.counts.reply.toString()} on-chain, shown when the
+            collector is back.
           </p>
+        ) : shownReplies.length === 0 ? (
+          <p className="muted">No replies yet. Be the first — 2 {tokenSymbol}.</p>
+        ) : (
+          <>
+            <ul>
+              {shownReplies.map((r) => (
+                <li key={r.index}>
+                  <code>{shortAddress(r.actor)}</code> <span className="muted">#{r.index}</span>
+                  {r.blockNumber === 0 && <span className="muted"> · posting…</span>}
+                  <p>{r.text}</p>
+                </li>
+              ))}
+            </ul>
+            {replyCursor !== null && (
+              <button
+                className="btn"
+                disabled={loadingReplies}
+                onClick={() => void fetchReplies(replyCursor, true)}
+              >
+                {loadingReplies ? "Loading…" : `Show ${replyTotal - shownReplies.length} more`}
+              </button>
+            )}
+          </>
         )}
       </div>
     </section>
