@@ -11,8 +11,9 @@ The author's payout is a direct function of aggregate real reading time, so
 better writing holds attention longer and earns more. That's the whole
 mechanism.
 
-> **Status:** testnet-only build for **Monad's Metropolis hackathon**. Contracts,
-> reader SDK, collector, and web frontend are all implemented and tested
+> **Status:** testnet-only build for **Monad's Metropolis hackathon**, built with
+> AI pair-programming (see [Built with AI](#built-with-ai)). Contracts, reader
+> SDK, collector, and web frontend are all implemented and tested
 > (**37 · 30 · 74 · 24** = 165 passing), and the three contracts are deployed to
 > Monad testnet and exercised end-to-end (smoke + live canary). **Not audited.
 > Not for real funds.** See [Known limitations](#known-limitations).
@@ -53,6 +54,27 @@ for that reader + article.
 engagement — like / favorite (1 WMON → author), reply (2 WMON → author, text in
 the event log), dislike (1 WMON → treasury only), and tips (any amount →
 author). All exact-amount WMON, no funds ever custodied by the contract.
+
+---
+
+## Why Monad
+
+The core mechanism — settling a payment channel every few seconds for every open
+reading session — only makes sense on a chain where a `settle` transaction costs
+a rounding error and confirms in well under a second.
+
+- **~400 ms blocks, ~800 ms finality.** `openSession` / `settle` / `closeSession`
+  feel synchronous: the reader watches the spend meter move and their refund land
+  almost immediately, instead of staring at a pending spinner.
+- **Low, predictable gas.** Gas per `settle` is negligible next to the WMON being
+  streamed, so the *protocol fee* — not gas — stays the dominant cost of a fake
+  read. That's what makes the reader-funded anti-sybil argument actually hold.
+- **High throughput + parallel execution.** Many concurrent readers, each
+  emitting a voucher/settle cadence, don't contend for blockspace.
+- **Full EVM + Ethereum-RPC compatibility.** Hardhat, OpenZeppelin, viem and
+  wagmi all worked unmodified. The only Monad-specific accommodations are using
+  canonical **WMON** as the payment token and tuning the collector's
+  `eth_getLogs` range for the reply indexer.
 
 ---
 
@@ -264,3 +286,52 @@ Next:
    challenge, to price out spam.
 6. **Splitters** — `transferAuthorship` to a 0xSplits-style contract.
 7. **Audit** + timelocked-multisig ownership before any mainnet deployment.
+
+---
+
+## Technology stack
+
+| Layer | Stack |
+|---|---|
+| Contracts | Solidity 0.8.24 · Hardhat · OpenZeppelin Contracts 5.1 · `evmVersion: paris` · Hardhat/Chai tests · Slither + solhint |
+| Reader SDK | TypeScript · viem · tsup (ESM + CJS + d.ts) · vitest + happy-dom |
+| Collector | Node ≥ 20 · TypeScript · Fastify 5 · `@fastify/cors` · viem · vitest |
+| Web | Next.js 15 (App Router) · React 19 · wagmi v2 (injected connector) · viem · TanStack Query · `marked` + DOMPurify · Inter + Roboto Mono |
+| Chain | Monad testnet (chainId 10143) · WMON payment token · Multicall3 |
+| Infra | QuickNode RPC · Vercel (web) · Railway (collector) |
+
+## Attribution
+
+Third-party code and services used (all under permissive licenses):
+
+- **OpenZeppelin Contracts 5.1.0** (MIT) — `SafeERC20`, `ReentrancyGuard`,
+  `Ownable`, `Pausable`, and EIP-712 utilities in the Solidity contracts.
+- **viem** (MIT), **wagmi** (MIT), **@tanstack/react-query** (MIT) — chain
+  interaction and React wallet/query hooks.
+- **Next.js** (MIT), **React** (MIT) — the web frontend.
+- **Fastify** + **@fastify/cors** (MIT) — the collector HTTP service.
+- **tsup** (MIT) — the reader-SDK bundler. **vitest** (MIT) — tests.
+- **marked** (MIT) + **DOMPurify** (Apache-2.0 / MPL-2.0) — Markdown render +
+  sanitize in the reader view.
+- **Hardhat** + `@nomicfoundation/hardhat-toolbox` (MIT) — contract build/test.
+- **Slither**, **solhint** (AGPL-3.0 / MIT) — static analysis, dev-only, not shipped.
+- **Multicall3** (`0xcA11bde05977b3631167028862bE2a173976CA11`) — canonical
+  batched-read contract, used by the web app.
+- **WMON** (`0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541`) — canonical Wrapped
+  Monad on testnet, used as the payment token (not our code).
+- **Inter** and **Roboto Mono** (SIL Open Font License) — via Google Fonts.
+
+## Built with AI
+
+attention-press was built with **Claude Code** (Anthropic's agentic coding tool)
+as an AI pair-programmer. The architecture, the Solidity contracts, the reader
+SDK, the collector service, and the Next.js frontend were designed and written in
+collaboration with the AI agent across the build window. All contract code was
+reviewed, unit- and adversarially-tested (**165 tests** across the four
+packages), and run through Slither + solhint — see
+[`packages/contracts/SECURITY.md`](packages/contracts/SECURITY.md) for the
+honest security gap. Commits are co-authored `Claude Sonnet`.
+
+## License
+
+[MIT](LICENSE) © 2026 WILDTERRALABS.

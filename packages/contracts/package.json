@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Smart contracts for reader-funded pay-per-second publishing on Monad",
+  "license": "MIT",
   "scripts": {
     "build": "hardhat compile",
     "test": "hardhat test",

@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Author-side service: ingest reader vouchers, validate them, and auto-settle on-chain",
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
