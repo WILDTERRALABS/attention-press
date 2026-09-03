@@ -74,9 +74,11 @@ code { font-family: var(--font-mono); font-size: 0.88em; }
   padding: 8px 14px; border-radius: 0; cursor: pointer; line-height: 1.1;
 }
 .btn:hover:not(:disabled) { background: var(--line-strong); color: #fff; }
-.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
 .btn-primary:hover:not(:disabled) { background: var(--line-strong); border-color: var(--line-strong); }
+/* grey (not faded-purple) disabled primary reads clearer + more utilitarian */
+.btn-primary:disabled { background: var(--muted); border-color: var(--muted); color: #fff; opacity: 1; }
 .btn-ghost { border-color: transparent; background: transparent; }
 .btn-ghost:hover:not(:disabled) { background: transparent; color: var(--accent); border-color: transparent; }
 .btn-warn { background: var(--warn); border-color: var(--line-strong); color: var(--line-strong); font-weight: 700; }
@@ -212,18 +214,20 @@ textarea { min-height: 240px; resize: vertical; font-family: var(--font-mono); f
 .article-body a { color: var(--accent); text-decoration: underline; }
 .article-body blockquote { border-left: 3px solid var(--accent); margin: 0; padding-left: 14px; color: var(--muted); }
 
+/* paywall: hard cut, not a soft fade — the LOCKED rule makes it obviously
+   deliberate (early dapps clipped; they didn't feather). */
 .article-locked { position: relative; }
 .article-locked .preview-text {
-  font-size: 16px; line-height: 1.75;
-  -webkit-mask-image: linear-gradient(180deg, #000 60%, transparent);
-  mask-image: linear-gradient(180deg, #000 60%, transparent);
+  font-size: 16px; line-height: 1.75; font-family: var(--font-body);
+  max-height: 13em; overflow: hidden;
 }
 .lock-note {
-  border: 1px solid var(--border); background: var(--panel-2);
-  border-radius: 0; padding: 14px 16px; color: var(--muted); font-size: 13.5px;
+  border: 0; border-top: 2px solid var(--line-strong); border-bottom: 1px solid var(--border);
+  background: transparent; border-radius: 0; padding: 12px 2px; margin-top: 14px;
+  color: var(--muted); font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.02em;
 }
 
-/* ---- spend meter ---- */
+/* ---- spend meter (reads like a status readout / gauge panel) ---- */
 .meter {
   position: sticky; top: 62px; z-index: 5;
   border: 2px solid var(--line-strong); background: var(--bg); border-radius: 0;
@@ -234,13 +238,28 @@ textarea { min-height: 240px; resize: vertical; font-family: var(--font-mono); f
   display: inline-flex; align-items: center; gap: 8px; font-weight: 700;
   font-family: var(--font-mono); text-transform: uppercase; font-size: 12px; letter-spacing: 0.04em;
 }
-.dot { width: 8px; height: 8px; border-radius: 0; background: var(--muted); }
-.dot.reading { background: var(--accent); }
+.dot { width: 8px; height: 8px; border-radius: 0; background: var(--muted); flex: none; }
+.dot.reading { background: var(--accent); animation: ap-blink 1.2s steps(1) infinite; }
 .dot.paused { background: var(--warn); }
 .dot.ended { background: var(--muted); }
-.meter-stats { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 10px; font-size: 12px; font-family: var(--font-mono); }
-.meter-stats b { font-size: 14px; display: block; color: var(--text); }
-.bar { height: 8px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 0; margin-top: 10px; overflow: hidden; }
+@keyframes ap-blink { 50% { opacity: 0.3; } }
+
+/* labeled readout grid with hairline cell dividers */
+.meter-stats {
+  display: flex; flex-wrap: wrap; margin-top: 12px;
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.meter-stats > span { padding: 2px 16px 2px 0; }
+.meter-stats > span + span { border-left: 1px solid var(--border); padding-left: 16px; }
+.meter-stats b {
+  display: block; margin-bottom: 2px; font-size: 15px; font-weight: 700;
+  text-transform: none; letter-spacing: 0; color: var(--text);
+}
+.bar {
+  height: 10px; background: var(--panel-2); border: 1px solid var(--line-strong);
+  border-radius: 0; margin-top: 12px; overflow: hidden;
+}
 .bar > i { display: block; height: 100%; background: var(--accent); }
 
 /* ---- one-time standing-allowance prompt ---- */
@@ -264,7 +283,11 @@ textarea { min-height: 240px; resize: vertical; font-family: var(--font-mono); f
 .action-block { margin-top: 18px; }
 .action-inline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .action-inline input { width: 120px; }
-.replies ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
-.replies li { border: 1px solid var(--border); background: var(--panel); border-radius: 0; padding: 10px 12px; font-size: 13.5px; }
-.replies li code { font-family: var(--font-mono); }
+/* replies: one bordered list, hairline row separators (Etherscan-list feel) */
+.replies ul { list-style: none; padding: 0; margin: 12px 0 0; border: 1px solid var(--border); }
+.replies li { border: 0; border-top: 1px solid var(--border); padding: 10px 12px; font-size: 13.5px; }
+.replies li:first-child { border-top: 0; }
+.replies li code { font-family: var(--font-mono); font-size: 12px; color: var(--text); }
+.replies li .muted { font-family: var(--font-mono); font-size: 11px; }
 .replies li p { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; font-family: var(--font-body); }
+.replies > button { display: block; width: 100%; margin-top: -1px; } /* butts against the list, table-footer style */
