@@ -83,6 +83,21 @@ describe("ReplyIndexer", () => {
     expect(widths.filter((w) => w === 125).length).toBeGreaterThan(10); // walked to head in 125s
   });
 
+  it("remembers a shrunk range across passes — no repeated shrinking", async () => {
+    const { chain, store, indexer } = setup({ rangeSize: 1_000, minRange: 100n, reorgBuffer: 0n });
+    chain.head = 2_000n;
+    chain.maxLogRange = 150;
+    await indexer.runOnce(); // shrinks 1000 -> ... -> 125
+    const callsAfterFirst = chain.getLogsCalls.length;
+
+    chain.head = 5_000n;
+    await indexer.runOnce(); // must NOT retry 1000/500/250 again
+    const widthsSecondPass = chain.getLogsCalls
+      .slice(callsAfterFirst)
+      .map((c) => Number(c.to - c.from + 1n));
+    expect(widthsSecondPass.every((w) => w <= 125)).toBe(true);
+  });
+
   it("re-scans the reorg buffer without duplicating", async () => {
     const { chain, store, indexer } = setup({ reorgBuffer: 20n });
     chain.head = 100n;

@@ -43,6 +43,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CollectorConfi
       .filter(Boolean),
     articleActionsFromBlock: BigInt(env.ARTICLE_ACTIONS_FROM_BLOCK ?? "0"),
     replyIndexIntervalMs: Number(env.REPLY_INDEX_INTERVAL_MS ?? 15_000),
-    logQueryRange: Number(env.LOG_QUERY_RANGE ?? 10_000),
+    // QuickNode's Monad testnet caps eth_getLogs at 1000 blocks; the public RPC
+    // at 100. 900 clears QuickNode with no wasted shrink; the indexer halves to
+    // a 100 floor for anything stricter.
+    logQueryRange: Number(env.LOG_QUERY_RANGE ?? 900),
   };
 }

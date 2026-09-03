@@ -28,6 +28,8 @@ export class ReplyIndexer {
   private readonly reorgBuffer: bigint;
   private readonly minRange: bigint;
   private readonly blockTime = new Map<bigint, number>();
+  /** Last window size the provider accepted; carried across passes so a shrink sticks. */
+  private effectiveRange: bigint;
 
   constructor(
     private readonly chain: ChainAdapter,
@@ -36,6 +38,7 @@ export class ReplyIndexer {
   ) {
     this.reorgBuffer = opts.reorgBuffer ?? 10n;
     this.minRange = opts.minRange ?? 100n;
+    this.effectiveRange = BigInt(Math.max(1, Math.floor(opts.rangeSize)));
   }
 
   async start(): Promise<void> {
@@ -63,7 +66,7 @@ export class ReplyIndexer {
       if (lo < 0n) lo = 0n;
       if (lo > head) return { scannedTo: cursor, added: 0 };
 
-      let range = BigInt(Math.max(1, Math.floor(this.opts.rangeSize)));
+      let range = this.effectiveRange;
       while (lo <= head) {
         const hi = lo + range - 1n > head ? head : lo + range - 1n;
         let logs;
@@ -73,6 +76,7 @@ export class ReplyIndexer {
           if (range > this.minRange) {
             const next = range / 2n;
             range = next < this.minRange ? this.minRange : next;
+            this.effectiveRange = range; // remember for the rest of this pass and future ticks
             this.opts.log?.("range too wide, shrinking", { range: range.toString(), err: String(err) });
             continue;
           }
