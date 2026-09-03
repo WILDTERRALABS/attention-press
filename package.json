@@ -11,5 +11,8 @@
     "test": "npm run test --workspaces --if-present",
     "test:contracts": "npm test -w @attention-press/contracts",
     "test:sdk": "npm test -w @attention-press/reader-sdk"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

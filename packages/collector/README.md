@@ -132,6 +132,35 @@ settled totals, bios, content keys, the reply index, and the reply cursor block)
 after each settle tick / index pass and on `SIGINT`/`SIGTERM`, and reloaded on
 boot.
 
+## Deploy (Railway)
+
+The collector is a stateful always-on process (settle loop + reply indexer + a
+JSON snapshot on disk), so it needs a real host — not a serverless platform.
+Railway fits; Render works only on a paid tier (its free tier sleeps after 15
+min idle, which stops the loops); Fly.io works with a `fly.toml`.
+
+Repo-root [`railway.json`](../../railway.json) pins the build/start commands so
+the npm-workspace layout deploys cleanly:
+
+- **New Project → Deploy from GitHub repo** → pick this repo. Leave the service
+  Root Directory at the repo root (the config file builds the one workspace).
+- Build: `npm ci && npm run build --workspace @attention-press/collector`.
+  Start: `npm run start --workspace @attention-press/collector` (npm runs it
+  with the cwd set to `packages/collector`, so `dist/index.js` resolves).
+- Health check is `GET /health`; restart-on-failure is enabled.
+- **Watch Paths** (service settings): `packages/collector/**` — so a push that
+  only touches the web app or contracts doesn't redeploy the collector.
+- **Networking → Generate Domain** gives the public HTTPS URL to put in the web
+  app's `NEXT_PUBLIC_COLLECTOR_URL`.
+- **Volume**: add one mounted at `/data`, then set `DATA_DIR=/data`. The store
+  `mkdir -p`s it on boot. A service with a volume runs a single replica — which
+  is required anyway (two settle loops would race the settler nonce).
+- Do **not** set `PORT` — Railway injects it and the collector reads it.
+
+`ALLOWED_ORIGINS` must list the exact web origin(s) (scheme + host, no trailing
+slash), e.g. `https://attention-press.vercel.app`. Add Vercel preview URLs too if
+you use them.
+
 ## Not done yet
 
 - In-memory store + JSON snapshot only — swap for SQLite/Postgres for
