@@ -61,13 +61,22 @@ export class EngagementTracker {
     this.running = true;
 
     this.visible = typeof document !== "undefined" ? document.visibilityState === "visible" : true;
-    this.focused = typeof document !== "undefined" && typeof document.hasFocus === "function" ? document.hasFocus() : true;
+    // Optimistic focus. A session almost always starts right after a wallet
+    // popup closes, and `document.hasFocus()` is an unreliable false-negative in
+    // that moment: the tab stayed *visible* the whole time, but the browser has
+    // not handed the focus flag back to the page yet, and no `focus` event fires
+    // to fix it (the window itself never lost focus — only the extension popup
+    // did). Seeding `false` there means normal reading accrues nothing until the
+    // reader clicks the page. A genuine blur still demotes us via the `blur`
+    // listener bound below.
+    this.focused = true;
     this.idle = false;
     this.scrollStalled = false;
 
     // Seed the initial engaged state without emitting — starting is not a
     // transition from the caller's point of view; they can read isEngaged.
-    this.engaged = this.visible && this.focused && !this.manualPaused;
+    this.engaged =
+      this.visible && this.focused && !this.idle && !this.scrollStalled && !this.manualPaused;
     this.lastEngagedAt = this.engaged ? now() : null;
 
     this.bind(document, "visibilitychange", () => {

@@ -69,16 +69,21 @@ cap.
 
 ## Engagement model
 
-Accrual runs only while **all** of these hold:
+A session **starts engaged** the moment it opens (as long as the tab is
+visible). It only pauses on *positive* evidence of disengagement:
 
-- `document.visibilityState === "visible"` (handles `visibilitychange`, `pagehide`/`pageshow`)
-- the window has focus (`focus` / `blur`)
-- there has been user activity within `idleTimeoutMs` (default 30s) — pointer, key, wheel, scroll, touch
-- not manually paused via `meter.pause()`
-- *(optional)* scroll has progressed within `scrollStallTimeoutMs` on a scrollable `target` — off by default
+- `document.visibilityState` goes `hidden` (`visibilitychange`, `pagehide`)
+- the window fires `blur`
+- no user activity for `idleTimeoutMs` (default 30s) — pointer, key, wheel, scroll, touch
+- `meter.pause()` was called
+- *(optional)* scroll hasn't progressed within `scrollStallTimeoutMs` on a scrollable `target` — off by default
 
-Any of these flipping emits `session:paused` with the `reason`; recovering emits
-`session:resumed`. Engaged time is measured with a monotonic clock
+Focus is assumed at start rather than read from `document.hasFocus()`, which is
+an unreliable false-negative right after a wallet popup closes and would
+otherwise require a click to begin accruing normal reading.
+
+Any of the above flipping emits `session:paused` with the `reason`; recovering
+emits `session:resumed`. Engaged time is measured with a monotonic clock
 (`performance.now()`).
 
 ## Ephemeral key & security

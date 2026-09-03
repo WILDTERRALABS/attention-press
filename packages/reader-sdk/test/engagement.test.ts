@@ -36,6 +36,27 @@ describe("EngagementTracker", () => {
     tracker.stop();
   });
 
+  it("is engaged from the start when visible even if document.hasFocus() is false", () => {
+    // The real-world case: a session starts right after a wallet popup closes and
+    // the browser has not restored the page's focus flag yet. Normal reading must
+    // still accrue — no click required.
+    document.hasFocus = () => false;
+    const { tracker, changes } = makeTracker();
+    tracker.start();
+    expect(tracker.isEngaged).toBe(true);
+    expect(tracker.pauseReason).toBeNull();
+    expect(changes).toEqual([]); // no spurious pause on start
+
+    vi.advanceTimersByTime(4_000);
+    expect(Math.round(tracker.engagedSeconds)).toBe(4); // accruing without interaction
+
+    // a genuine blur still demotes
+    window.dispatchEvent(new Event("blur"));
+    expect(tracker.isEngaged).toBe(false);
+    expect(tracker.pauseReason).toBe("blur");
+    tracker.stop();
+  });
+
   it("pauses on hidden, resumes on visible, with the right reasons", () => {
     const { tracker, changes } = makeTracker();
     tracker.start();
