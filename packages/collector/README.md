@@ -1,29 +1,41 @@
 # @attention-press/collector
 
-Author-side service. Reader SDKs `POST` signed vouchers here; the collector
-validates each one exactly as `AttentionStream` would, keeps the highest per
-session, and periodically calls `settle(...)` on-chain so the author's balance
-tracks reading in near real time.
+Author-side service. It does four things, none of which can custody user funds:
 
-`settle` is permissionless — the collector's wallet only pays gas, it never
-receives fees or author payments.
+1. **Settlement.** Reader SDKs `POST` signed vouchers here; the collector
+   validates each exactly as `AttentionStream` would, keeps the highest per
+   session, and periodically calls `settle(...)` so the author's balance tracks
+   reading in near real time. `settle` is permissionless — the collector's
+   wallet only pays gas.
+2. **Content-key custody.** Authors register an article's AES key (by plaintext
+   `contentHash`); readers with a verified open session get it back.
+3. **Reply index.** Backfills and polls `ArticleActions.Replied` logs into a
+   local store, served paginated at `GET /articles/:id/replies`.
+4. **Author bios + per-reader stats** — small read helpers for the frontend.
 
 ## Run
 
 ```bash
-cp .env.example .env      # set RPC_URL, ATTENTION_STREAM_ADDRESS, SETTLER_PRIVATE_KEY
+cp .env.example .env      # fill in the required vars below
 npm run build
-npm start                 # or: npm run dev
+npm start                 # or: npm run dev  (tsx watch)
 ```
 
 | Env | Meaning |
 | --- | --- |
-| `RPC_URL`, `CHAIN_ID` | chain endpoint (Monad testnet: `https://testnet-rpc.monad.xyz`, `10143`) |
+| `RPC_URL`, `CHAIN_ID` | chain endpoint + id (`10143`). Use a **dedicated endpoint** — the public RPC rate-limits and caps `eth_getLogs` at 100 blocks. |
 | `ATTENTION_STREAM_ADDRESS` | deployed `AttentionStream` |
-| `SETTLER_PRIVATE_KEY` | gas wallet for `settle` txs |
+| `ARTICLE_REGISTRY_ADDRESS` | deployed `ArticleRegistry` (key-release author check) |
+| `ARTICLE_ACTIONS_ADDRESS` | deployed `ArticleActions` (reply indexer source) |
+| `SETTLER_PRIVATE_KEY` | **dedicated gas-only wallet** — the settle loop signs `settle` txs from it (the reply indexer only reads). Anything else using this key races the nonce. `settle` is permissionless, so it never holds fees. |
 | `SETTLE_INTERVAL_MS` | settle-loop cadence (default `30000`) |
 | `MIN_SETTLE_DELTA` | skip settling deltas below this to save gas (default `0`) |
+| `ARTICLE_ACTIONS_FROM_BLOCK` | start block for the one-time reply backfill (default `0` = genesis; set to just before the ArticleActions deploy). Backfill is idempotent. |
+| `REPLY_INDEX_INTERVAL_MS` | reply-poll cadence (default `15000`) |
+| `LOG_QUERY_RANGE` | max block span per `eth_getLogs` (default `900`; QuickNode Monad caps at 1000, public RPC at 100). Halves to a 100 floor and remembers the working size if a provider rejects a range. |
+| `MAX_ACCRUAL_WINDOW_SEC` | mirror of the contract's `MAX_ACCRUAL_WINDOW` (default `604800`) |
 | `DATA_DIR` | crash-recovery snapshot location (default `.data`) |
+| `ALLOWED_ORIGINS` | comma-separated CORS origins (default `http://localhost:3000`) |
 
 ## HTTP API
 
@@ -50,6 +62,23 @@ On-chain session struct + the latest stored voucher + `pendingDelta`
 `{ reader, totalPaid, sessionsOpened, articlesRead }` — reflects only sessions
 whose vouchers reached this collector.
 
+### `GET /articles/:id/replies`
+Indexed `ArticleActions.Replied` logs for an article.
+`?order=asc|desc` (default `asc` = chronological), `?cursor=<offset>`,
+`?limit=1..200` (default 50). Returns:
+```json
+{
+  "articleId": "9", "order": "asc", "total": 3, "nextCursor": 50,
+  "replies": [
+    { "index": 0, "actor": "0x…", "text": "…", "toAuthor": "1950000000000000000",
+      "fee": "50000000000000000", "blockNumber": 59088175, "blockTime": 1788360192,
+      "txHash": "0x…" }
+  ]
+}
+```
+`nextCursor` is `null` on the last page. 400 on a bad id / order / limit / cursor.
+Served from the local index — up to `REPLY_INDEX_INTERVAL_MS` behind chain head.
+
 ### `GET /profiles/:address` · `GET /profiles?addresses=a,b,c` · `POST /profiles`
 Off-chain author bio (≤280 chars). `GET /profiles/:address` → `{ address, text, updatedAt }`.
 `GET /profiles?addresses=` (1..100) → `{ "<lowercased addr>": { text, updatedAt }, … }`.
@@ -69,11 +98,9 @@ Off-chain author bio (≤280 chars). `GET /profiles/:address` → `{ address, te
   `ArticleRegistry.authorOf(id)`. Otherwise 401/403/404/409.
 
 ### `GET /health` · `GET /metrics`
-Wiring + liveness, and counters (`vouchersReceived/Accepted/Rejected`,
-`settleSent/Failed`).
-
-CORS: browser origins are allowed via `ALLOWED_ORIGINS` (comma-separated; default
-`http://localhost:3000`).
+Wiring + liveness (`status`, `chainId`, `streamAddress`, `settler`,
+`blockTimestamp`; `status: "degraded"` if the RPC is unreachable) and counters
+(`vouchersReceived/Accepted/Rejected`, `settleSent/Failed`).
 
 ## How settlement works
 
@@ -87,8 +114,23 @@ of the on-chain `claimed`. For each it re-reads the session and then:
 - otherwise → `settle(sessionId, cumulativeAmount, signature)`; on revert, count
   it failed and leave it pending for the next tick
 
-State is snapshotted to `DATA_DIR/collector-state.json` after each tick and on
-`SIGINT`/`SIGTERM`, and reloaded on boot.
+## How the reply index works
+
+On startup, one backfill from `ARTICLE_ACTIONS_FROM_BLOCK` (or the persisted
+cursor, whichever is higher) to chain head, walking blocks in `LOG_QUERY_RANGE`
+windows; if the provider rejects a range it halves the window down to a 100-block
+floor and remembers the working size. Then it polls every
+`REPLY_INDEX_INTERVAL_MS`, re-scanning a small block buffer below the cursor to
+absorb reorgs. Idempotent — replies are keyed by the contract's own per-article
+`Replied` index, so overlapping ranges and restarts never double-count. Block
+timestamps are fetched once per block and cached.
+
+## Persistence
+
+State is snapshotted to `DATA_DIR/collector-state.json` (version 4: sessions,
+settled totals, bios, content keys, the reply index, and the reply cursor block)
+after each settle tick / index pass and on `SIGINT`/`SIGTERM`, and reloaded on
+boot.
 
 ## Not done yet
 
@@ -98,11 +140,15 @@ State is snapshotted to `DATA_DIR/collector-state.json` after each tick and on
   and only ever help the author get paid; add a limiter before exposing publicly).
 - Sequential settlement, one tx at a time. Fine at low volume; batch/parallelise
   with managed nonces later.
-- No websocket/event subscription — it polls on an interval.
+- No websocket/event subscription — settlement and the reply index both poll.
+- **Trusted key custodian:** the operator can decrypt any article whose key it
+  holds. A threshold/DKG release scheme fits the same endpoint.
 
 ## Develop
 
 ```bash
-npm test        # vitest: voucher validation, store, settle loop, HTTP routes
+npm test        # 74 — voucher validation, store snapshot, settle loop, HTTP routes,
+                #      reply indexer (backfill windows, idempotency, adaptive getLogs
+                #      range, reorg buffer, cached timestamps)
 npm run typecheck
 ```

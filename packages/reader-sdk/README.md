@@ -58,7 +58,7 @@ await meter.stop();                         // final voucher + closeSession + re
 
 | SDK | Contract |
 | --- | --- |
-| `meter.start()` | ERC-20 `approve` (if allowance < budget) → `openSession(articleId, budget, ratePerSec, sessionKey.address)`; `sessionId` read from the `SessionOpened` event |
+| `meter.start()` | ERC-20 `approve` **only if allowance < budget** → `openSession(articleId, budget, ratePerSec, sessionKey.address)`; `sessionId` read from the `SessionOpened` event. (The `@attention-press/web` app pre-approves a standing allowance, so the approve step is normally skipped.) Pass `skipApproval: true` if the host handles approval itself. |
 | voucher every `voucherIntervalMs` | EIP-712 `Voucher(bytes32 sessionId, uint256 cumulativeAmount)` signed by the ephemeral key, under domain `("AttentionStream", "1", chainId, contractAddress)` — the author's collector submits it to `settle` |
 | `meter.stop()` | `closeSession(sessionId, latestCumulative, latestSig)` from the reader's wallet; unspent budget refunded |
 
@@ -110,7 +110,8 @@ Lower-level exports are available too: `EngagementTracker`, `IdleDetector`,
 
 ```bash
 npm run build      # tsup -> dist/ (ESM + CJS + d.ts)
-npm test           # vitest (happy-dom)
+npm test           # 30 — vitest (happy-dom): voucher digest, accrual clamps,
+                   #      engagement model, meter lifecycle
 npm run typecheck
 ```
 

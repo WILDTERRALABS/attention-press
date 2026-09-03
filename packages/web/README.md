@@ -21,6 +21,18 @@ Next.js frontend for attention-press.
   `session:ended`. Live **spend meter** for tokens streamed / engaged time /
   budget while reading. Vouchers POST to `NEXT_PUBLIC_COLLECTOR_URL`. Payment
   token is **WMON**; a one-click **Wrap MON** appears if your balance is short.
+  Below the body, a **paid-actions bar** — like / dislike / favorite (one each
+  per wallet), tip, and a reply composer — talking to `ArticleActions`. Replies
+  render from the collector's index (`GET /articles/:id/replies`, chronological,
+  "show more" pagination, ~20s poll, optimistic insert of a just-posted reply).
+- **Standing allowance.** Instead of an `approve` tx before every session and
+  action, the reader approves once per contract (a bounded amount — 500 WMON to
+  `AttentionStream`, 100 WMON to `ArticleActions`) via an "Approve once, then
+  read / react freely" panel that discloses the trade-off. After that every
+  `openSession` / like / tip / reply is a single confirmation. `MaxUint256` is
+  deliberately not used.
+- Discovery pins `NEXT_PUBLIC_PINNED_ARTICLE_ID` (default 8, the project
+  explainer) to the top with a "Start here" badge, regardless of earnings.
 
 ## Run
 
@@ -39,25 +51,33 @@ Wallet: any injected EIP-1193 wallet (MetaMask, Rabby, …) on Monad Testnet
 
 ## Env
 
+All must be `NEXT_PUBLIC_` to reach the browser. Contract addresses have in-code
+defaults (the deployed testnet contracts) — env only overrides.
+
 | Var | Default |
 | --- | --- |
-| `NEXT_PUBLIC_CHAIN_ID` / `NEXT_PUBLIC_RPC_URL` | `10143` / `https://testnet-rpc.monad.xyz` |
-| `NEXT_PUBLIC_ARTICLE_REGISTRY` / `NEXT_PUBLIC_ATTENTION_STREAM` | deployed testnet addresses |
+| `NEXT_PUBLIC_CHAIN_ID` / `NEXT_PUBLIC_RPC_URL` | `10143` / `https://testnet-rpc.monad.xyz` — **set a dedicated endpoint** (QuickNode / Alchemy); the browser trips the public RPC's rate limit |
+| `NEXT_PUBLIC_ARTICLE_REGISTRY` / `NEXT_PUBLIC_ATTENTION_STREAM` / `NEXT_PUBLIC_ARTICLE_ACTIONS` | the deployed testnet addresses |
+| `NEXT_PUBLIC_PINNED_ARTICLE_ID` | `8` (0 disables) |
 | `NEXT_PUBLIC_COLLECTOR_URL` | `http://localhost:8787` |
-| `NEXT_PUBLIC_DEFAULT_RATE_PER_SEC` / `NEXT_PUBLIC_DEFAULT_BUDGET` | `1e15` / `6e17` base units |
+
+Pay-rate tiers live in `src/lib/chain.ts` (`RATE_TIERS`), chosen per article at
+publish time; the session budget is derived (rate × 10-minute cap).
 
 ## Not done yet
 
 - No indexer — discovery multicalls every article id `1..nextId-1`. Fine for
   tens of articles; add a subgraph for scale.
 - Inline data-URI metadata only. Articles published with `ipfs://` metadata show
-  a placeholder — wire a gateway fetch + a Pinata publish path next.
-- No per-read rate/budget controls in the UI yet (uses the env defaults).
-- `next lint` not configured.
+  a placeholder — wire a gateway fetch + a real pin path next.
+- Reply history depends on a single collector's index being up.
+- `next lint` is not configured — `next build` drops into an interactive setup
+  prompt. CI relies on `tsc` + `next build` + vitest.
 
 ## Develop
 
 ```bash
-npm test -w @attention-press/web        # vitest: format + metadata helpers
+npm test -w @attention-press/web        # 24 — format + metadata + rate + author helpers
 npm run typecheck -w @attention-press/web
+npm run build -w @attention-press/web   # also runs type-checking
 ```

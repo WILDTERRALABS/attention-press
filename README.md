@@ -1,57 +1,211 @@
 # attention-press
 
-Reader-funded, pay-per-second publishing on the Monad blockchain.
+**Get paid for attention, not clicks.** A publishing protocol on the Monad
+blockchain where readers pay authors *per second of genuine reading time* —
+no ads, no subscriptions, no view-count metrics to game.
 
-Anyone can publish an article. Readers stream a micro-payment to the author for
-every second they actually spend reading. Engaging pieces hold attention longer
-and earn more — quality compounds, volume does not.
+Anyone publishes an article. A reader escrows a small budget, and while they're
+actually reading — tab focused, scrolling, not idle — the client streams
+micro-payments to the author. Leave early and the unspent budget is refunded.
+The author's payout is a direct function of aggregate real reading time, so
+better writing holds attention longer and earns more. That's the whole
+mechanism.
 
-**Status:** contracts + reader SDK + collector + web frontend, all with test
-suites (12 · 26 · 32 · 5 passing). Contracts deployed to Monad testnet and
-exercised end-to-end (smoke test + live collector run).
-
-## Packages
-
-| Package | What |
-|---|---|
-| [`packages/contracts`](packages/contracts) | `ArticleRegistry` + `AttentionStream` (Hardhat, Solidity 0.8.24) |
-| [`packages/reader-sdk`](packages/reader-sdk) | `AttentionMeter` — client-side engagement tracking + EIP-712 voucher signing (TypeScript, viem) |
-| [`packages/collector`](packages/collector) | Author-side HTTP service — ingests vouchers, validates them like the contract, auto-`settle`s on an interval; also serves per-reader stats and signed author bios (Fastify, viem) |
-| [`packages/web`](packages/web) | Next.js frontend — discovery, publish (3-tier rate, **AES-encrypted body**), reader view with a live spend meter + session-gated decryption, `/profile/[address]` (Next 15, wagmi) |
-
-**Content gating:** article bodies are AES-256-GCM encrypted; `contentHash` still
-commits to the plaintext. The collector custodies the per-article key and
-releases it only after verifying an open on-chain session for that reader + that
-article. **Trust note:** the collector operator can decrypt any article it holds
-a key for — run your own collector if that matters. A threshold/DKG key-release
-scheme would remove this and slots into the same endpoint.
+> **Status:** testnet-only build for **Monad's Metropolis hackathon**. Contracts,
+> reader SDK, collector, and web frontend are all implemented and tested
+> (**37 · 30 · 74 · 24** = 165 passing), and the three contracts are deployed to
+> Monad testnet and exercised end-to-end (smoke + live canary). **Not audited.
+> Not for real funds.** See [Known limitations](#known-limitations).
 
 ---
 
-## Why this design needs no anti-sybil machinery
+## How it works
 
-The usual "read-to-earn" project has to fight bots because a third party (an ad
-pool, token emissions) funds the payout, so fake attention extracts real value.
+1. **Escrow.** The reader calls `openSession` on `AttentionStream`, locking a
+   budget (pay rate × a time cap) in WMON — a hard ceiling on what the session
+   can ever cost.
+2. **Ephemeral key.** The client generates a throwaway signing key that lives
+   only in browser memory for the session. No wallet popup per voucher.
+3. **Vouchers.** Every ~5s the client signs a tiny EIP-712 message — "session X
+   has now earned Y total" — monotonic and capped by `ratePerSec × elapsed`.
+4. **Settlement.** The **collector** submits the latest voucher on-chain,
+   ratcheting the author's claimable balance up. `settle` is permissionless, so
+   the author never depends on a single party's goodwill.
+5. **Close & refund.** On leave, `closeSession` settles the final voucher and
+   returns the unspent budget. If the collector vanishes, `readerReclaim` lets
+   the reader recover the remainder unilaterally after a timeout.
 
-Here **the reader funds the stream**, and value flows reader → author. Work
-through a publisher trying to farm their own article with a bot fleet:
+**Why no anti-sybil machinery is needed:** the reader funds the stream. A
+publisher pointing a bot fleet at their own article is their own wallet paying
+their own wallet, minus the protocol fee and gas every session — a guaranteed
+loss per fake second. Value only reaches an author when a distinct party spends
+their own money to keep reading. Wallet connect is all the identity this needs.
+(`packages/contracts/test/attention.test.ts` asserts the self-funded case nets
+`−fee`.)
 
-- The bot wallets must hold the real payment token. That token comes from the
-  publisher.
-- Streaming it "to themselves" routes it back to the publisher **minus the
-  protocol fee and minus gas** on `openSession` / `settle` / `closeSession`.
-- Net result for the publisher-controlled cluster: a guaranteed loss equal to
-  `fee + gas`, for every fake second.
+**Content gating:** article bodies are AES-256-GCM encrypted client-side before
+publishing; only the ciphertext + a short plaintext preview go on-chain, and
+`contentHash` still commits to the plaintext. The collector custodies the
+per-article key and releases it only after verifying an open on-chain session
+for that reader + article.
 
-So fake attention is strictly unprofitable by construction. The only way value
-reaches an author is a distinct party choosing to spend their own money to keep
-reading — which is exactly the signal we want. Wallet connect is all the identity
-this needs. (`test/attention.test.ts` asserts the self-funded case nets `-fee`.)
+**Beyond streaming**, a separate `ArticleActions` contract adds discrete paid
+engagement — like / favorite (1 WMON → author), reply (2 WMON → author, text in
+the event log), dislike (1 WMON → treasury only), and tips (any amount →
+author). All exact-amount WMON, no funds ever custodied by the contract.
 
-What remains is a **UX** problem, not a security one: stop billing the reader the
-moment they leave the page. The reader is the party motivated to enforce that,
-and the contract backstops them with a hard budget cap, a rate cap, and a
-timeout refund.
+---
+
+## Monorepo
+
+npm workspaces. `npm install` at the root installs everything.
+
+| Package | What it is |
+|---|---|
+| **[`packages/contracts`](packages/contracts)** | Solidity 0.8.24 / Hardhat. `ArticleRegistry` (author + contentHash + metadata pointer), `AttentionStream` (per-session payment channel, escrow + EIP-712 vouchers + fee + timeouts), `ArticleActions` (like/dislike/favorite/reply/tip). OpenZeppelin 5.1, `SafeERC20` + `ReentrancyGuard` + `Pausable`. Slither + solhint clean. See [`SECURITY.md`](packages/contracts/SECURITY.md). |
+| **[`packages/reader-sdk`](packages/reader-sdk)** | `@attention-press/reader-sdk` — client library. `AttentionMeter` opens the session, tracks engagement (focus / scroll / idle / `visibilitychange`), signs a voucher every ~5s with an in-memory ephemeral key, closes the session on `stop()`. TypeScript, viem, tsup (ESM + CJS + d.ts). |
+| **[`packages/collector`](packages/collector)** | `@attention-press/collector` — author-side HTTP service (Fastify + viem). Ingests vouchers → validates them exactly as the contract would → auto-`settle`s on an interval. Also: custodies content-decryption keys, serves signed author bios + per-reader stats, and **indexes `ArticleActions.Replied` logs** (backfill + poll) behind `GET /articles/:id/replies`. |
+| **[`packages/web`](packages/web)** | `@attention-press/web` — Next.js 15 / wagmi frontend. Discovery (Articles ranked by real spend, Authors ranked by earnings), publish flow (3 rate tiers, client-side encryption), reader view (session-gated decryption + live spend meter + one-click **Wrap MON**), `/profile/[address]`, and a **paid-actions bar** with a one-time standing WMON allowance ("approve once, then react freely"). |
+
+---
+
+## Deployed — Monad testnet (chainId `10143`)
+
+Canonical source: [`packages/contracts/deployments/monadTestnet.json`](packages/contracts/deployments/monadTestnet.json).
+
+| Contract | Address |
+|---|---|
+| `ArticleRegistry` | `0x34C48D04c566131aEa6DBA8E2727423A55e38aaa` |
+| `AttentionStream` | `0xca364C7eC309c293216B43f6C069Ee9c5b6959cc` |
+| `ArticleActions` | `0x04D91BC0bF42EF2bD639B565b5f53644930E80AC` (deploy block 59017209) |
+| WMON (payment token) | `0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541` |
+| treasury / deployer | `0x67dEf124555dDAABb406D4c79e65218F952f3668` |
+
+Protocol fee and action fee are both **250 bps (2.5%)**. The web app falls back
+to these addresses in code (env only overrides); the collector requires them
+explicitly in its `.env`.
+
+---
+
+## Run it locally
+
+```bash
+npm install       # workspace root
+npm test          # contracts 37 · reader-sdk 30 · collector 74 · web 24
+npm run build     # hardhat compile + tsup + tsc + next build
+```
+
+The contracts are **already deployed to testnet**, so a local run is just the
+collector + web against those addresses. Order matters: **collector → web**
+(the web reader view needs the collector for settlement and key release).
+
+### 1. Collector — `packages/collector`
+
+```bash
+cd packages/collector
+cp .env.example .env      # then edit .env
+npm run build && npm start   # :8787   (or: npm run dev)
+```
+
+| Env | Notes |
+|---|---|
+| `RPC_URL`, `CHAIN_ID` | `10143`. Use a **dedicated endpoint** (QuickNode / Alchemy) — the public RPC rate-limits and caps `eth_getLogs` at 100 blocks. |
+| `ATTENTION_STREAM_ADDRESS`, `ARTICLE_REGISTRY_ADDRESS`, `ARTICLE_ACTIONS_ADDRESS` | the deployed addresses above |
+| `SETTLER_PRIVATE_KEY` | **dedicated gas-only wallet**, used by nothing else — the settle loop signs `settle` txs from it, and any other use races the nonce. `settle` is permissionless, so this key never holds fees. (The reply indexer only reads.) |
+| `ARTICLE_ACTIONS_FROM_BLOCK` | start block for the one-time reply backfill (`59015000` is safely before the deploy; idempotent) |
+| `SETTLE_INTERVAL_MS`, `MIN_SETTLE_DELTA`, `REPLY_INDEX_INTERVAL_MS`, `LOG_QUERY_RANGE`, `DATA_DIR`, `MAX_ACCRUAL_WINDOW_SEC`, `ALLOWED_ORIGINS` | have working defaults; see `.env.example` |
+
+### 2. Web — `packages/web`
+
+```bash
+cd packages/web
+cp .env.example .env.local     # contract addresses have in-code defaults
+npm run build -w @attention-press/reader-sdk   # web consumes its dist/
+npm run dev -w @attention-press/web            # http://localhost:3000
+```
+
+Set `NEXT_PUBLIC_RPC_URL` to a dedicated endpoint — the browser fans out many
+`eth_call`s per render and trips the public RPC's rate limit. Wallet: any
+injected EIP-1193 wallet on Monad Testnet; the app prompts a network switch and
+offers a one-click Wrap MON → WMON.
+
+### Deploy the contracts yourself — `packages/contracts`
+
+```bash
+cd packages/contracts
+cp .env.example .env          # set DEPLOYER_KEY, MONAD_RPC_URL
+npm run deploy:monad          # ArticleRegistry (or reuse) + AttentionStream
+npm run deploy-actions:monad  # ArticleActions, against the JSON from the step above
+```
+
+Other scripts: `preflight:monad` (whoami), `list-articles:monad`,
+`retire:monad` (`IDS=1,2,3 …`), `actions-smoke:monad` (live canary — all five
+actions + revert cases against the deployed contract with a throwaway wallet),
+`lint:sol`, `slither`.
+
+---
+
+## Tests
+
+```bash
+npm test                              # all four packages
+npm test -w @attention-press/contracts   # 37 — registry, voucher settlement, caps,
+                                         #      timeout, self-farm, ArticleActions
+                                         #      (fees, dedup, SelfAction, reentrancy,
+                                         #      reply cap, atomicity), independence
+npm test -w @attention-press/reader-sdk  # 30 — voucher digest, accrual clamps,
+                                         #      engagement model, meter lifecycle
+npm test -w @attention-press/collector   # 74 — voucher validation, store snapshot,
+                                         #      settle loop, HTTP routes, reply indexer
+                                         #      (backfill windows, idempotency, adaptive
+                                         #      getLogs range, reorg buffer)
+npm test -w @attention-press/web         # 24 — format + metadata + rate + author helpers
+```
+
+Contracts also pass `slither .` (zero findings on `ArticleActions`) and
+`solhint` (zero errors). `packages/web` `next lint` is not configured — CI relies
+on `tsc` + `next build` + vitest.
+
+---
+
+## Known limitations
+
+This is a hackathon build. What's deliberately out of scope for this version:
+
+**Not audited.** No professional audit, no formal verification, no bug bounty,
+no on-chain monitoring, no timelocked-multisig owner (the admin is an EOA on
+testnet). `packages/contracts/SECURITY.md` documents the full gap. Do not deploy
+to mainnet with real value on the strength of this repo.
+
+**Content storage.** Article metadata (encrypted body + preview) is a base64
+`data:` URI stored directly in `ArticleRegistry.metadataURI` — not IPFS/Arweave.
+Articles published with an `ipfs://` pointer render a placeholder; a gateway
+fetch + a real pin path are future work.
+
+**Trusted collector.** The collector operator can decrypt any article whose key
+it holds, and the reply index is served by a single collector. Run your own for
+confidentiality. A threshold/DKG key-release scheme removes the trust assumption
+and slots into the same endpoint.
+
+**Collector internals.** In-memory store + JSON snapshot (no DB); no auth or rate
+limiting on `POST /vouchers`; sequential one-at-a-time settlement; polling, not
+event subscriptions.
+
+**Payment channel is unidirectional.** The last un-settled voucher increment
+(≤ one ~5s interval) is the author's risk if the reader closes in the same
+block. Bounded by voucher cadence, not eliminated.
+
+**Attention detection is advisory.** Focus/scroll/idle tracking protects the
+*reader's* wallet; it is not a payout oracle and the author does not have to
+trust it. There is no on-chain "reading proof" — time-on-page is inherently
+client-reported, and the economic model is what makes that acceptable.
+
+**No indexer.** Discovery multicalls every article id `1..nextId-1` — fine for
+tens of articles, needs a subgraph for scale.
+
+**Tokens.** Fee-on-transfer / rebasing tokens are not supported (`token` is
+immutable, set to WMON at deploy). Sock-puppet inflation of like/favorite counts
+is possible but costs the action fee per fake action.
 
 ---
 
@@ -59,200 +213,54 @@ timeout refund.
 
 ```
                  ┌────────────────────┐
-   publish  ───▶ │  ArticleRegistry   │  author, contentHash, metadataURI
+   publish  ───▶ │  ArticleRegistry   │  author, contentHash, metadataURI (data: URI)
                  └────────────────────┘
-                           ▲ authorOf / isActive
-                           │
-  reader   ─ openSession ─▶ ┌────────────────────┐ ─ settle(voucher) ─▶ author
-  (escrow budget)          │  AttentionStream   │
-  reader   ─ closeSession ▶ │  (payment channel) │ ─ fee ─▶ treasury
-                           └────────────────────┘
-       ▲ EIP-712 vouchers (off-chain, ~1 per 5s)      │
-       │                                              ▼
-  browser session key  ◀───────────  reader SDK: focus + scroll → sign
+                     ▲ authorOf / isActive
+        ┌────────────┼───────────────────────────┐
+        │            │                           │
+  reader ─ openSession ▶ ┌──────────────────┐ ─ settle(voucher) ─▶ author
+  (escrow budget)        │  AttentionStream │
+  reader ─ closeSession ▶ │  payment channel │ ─ fee ─▶ treasury
+                         └──────────────────┘
+        ▲ EIP-712 vouchers (off-chain, ~1 / 5s)   │
+        │                                         ▼
+   browser session key ◀──── reader SDK: focus + scroll → sign
+                                                  │
+  reader ─ like/dislike/favorite/reply/tip ▶ ┌──────────────────┐
+                                            │  ArticleActions  │ ─▶ author / treasury
+                                            └──────────────────┘
+                                                  │ Replied logs
+                                                  ▼
+                                    collector reply indexer → GET /articles/:id/replies
 ```
 
-### Content layer (off-chain)
-The article body lives on IPFS/Arweave. Only `contentHash` (a digest binding the
-article id to an exact body) and a `metadataURI` pointer go on-chain.
+**On-chain guards (`AttentionStream`):** monotonic `cumulativeAmount`, budget
+cap (reader's hard limit), rate cap (`ratePerSec × (elapsed + 1s)`, elapsed
+clamped to `MAX_ACCRUAL_WINDOW` = 7d), `ReentrancyGuard` + checks-effects-
+interactions on every money path, `SafeERC20`, fee ≤ 10%, `sessionTimeout` ∈
+[1d, 30d], EIP-712 domain binds chainId + verifyingContract.
 
-### `ArticleRegistry.sol`
-- `publish(contentHash, uri) → id` — permissionless, ids start at 1.
-- `retire(id)` / `updateMetadata(id, uri)` / `transferAuthorship(id, to)` — current author only.
-- `authorOf(id)` / `isActive(id)` — read surface used by the stream.
-
-### `AttentionStream.sol` — one payment channel per reading session
-A session is opened and closed on-chain (~2 transactions total, regardless of
-reading time); everything in between is off-chain signed vouchers.
-
-| Function | Caller | Effect |
-|---|---|---|
-| `openSession(articleId, budget, ratePerSec, signer)` | reader | Escrows `budget`. Registers `signer`, an **ephemeral key generated in the reader's browser**, so vouchers don't need a wallet popup. Returns `sessionId`. |
-| `settle(id, cumulativeAmount, sig)` | anyone (author's collector) | Verifies the EIP-712 voucher, ratchets `claimed` up to `cumulativeAmount`, pays `delta − fee` to the author and `fee` to the treasury. |
-| `closeSession(id, cumulativeAmount, sig)` | reader | Settles the final voucher, then refunds `budget − claimed`. |
-| `readerReclaim(id)` | reader | After `sessionTimeout` (default 3d): recover all unclaimed escrow, no voucher needed. |
-
-**Voucher** (EIP-712): `Voucher(bytes32 sessionId, uint256 cumulativeAmount)`,
-signed by the session key. `cumulativeAmount` is the running total owed — always
-increasing, always ≤ `budget`.
-
-**On-chain guards**
-- **Monotonic:** `cumulativeAmount ≥ claimed`.
-- **Budget cap:** `cumulativeAmount ≤ budget` — the reader's hard spend limit.
-- **Rate cap:** `cumulativeAmount ≤ ratePerSec × (elapsed + 1s)`, elapsed clamped
-  to `MAX_ACCRUAL_WINDOW` (7d). Bounds a stolen/buggy session key to the
-  advertised rate rather than the whole budget at once.
-- `ReentrancyGuard` on every money path; checks-effects-interactions
-  (`claimed` / `open` written before transfers); `SafeERC20`; `Ownable` admin.
-- Fee ≤ `MAX_FEE_BPS` (10%); `sessionTimeout` ∈ [1d, 30d].
-
-**Discovery stats** (`articleEarned`, `articleReaderSeconds`, `articleSessions`)
-are emitted for indexers. Rank feeds on `articleEarned` / distinct payers — raw
-session and second counts can be inflated by a self-funded reader (they just pay
-the fee to do it).
-
----
-
-## Threat model
-
-| Vector | Mitigation |
-|---|---|
-| Publisher farms own article with bots | Economically self-defeating: loses `fee + gas` per fake second. No identity system needed. |
-| Malicious/greedy frontend keeps signing after the reader leaves | Hard `budget` cap + on-chain `ratePerSec` cap + reader closes the session. UI ships a small default budget and short session length. |
-| Session key stolen from the browser | Can drain at most `budget`, and no faster than `ratePerSec`. Reader can `closeSession` immediately to cut losses. |
-| Reader withholds the final voucher to underpay | Author's collector receives vouchers in real time and calls `settle` to ratchet `claimed` up; the reader can never close below `claimed`. Residual risk = one voucher interval (~5s) if the reader closes in the same block — keep cadence tight. |
-| Reader abandons the session, locking escrow | `readerReclaim` after `sessionTimeout`. The author had the full window to `settle` held vouchers. |
-| Reentrancy / ERC-20 hooks | `nonReentrant` + effects-before-interactions + `SafeERC20`. |
-| Fee-on-transfer / rebasing payment token | **Not supported.** Use a standard ERC-20 (stablecoin or WMON). Documented, enforced by choosing the token at deploy. |
-| Signature replay across sessions/chains | Voucher binds `sessionId` (unique per reader/article/chain/contract) inside the EIP-712 domain (name, version, chainId, verifyingContract). |
-| Admin key compromise | Admin can only move `treasury`, `protocolFeeBps` (≤10%), `sessionTimeout` (1–30d). It cannot touch live sessions, escrow, or `claimed`. Use a multisig/timelock as owner. |
-| Plagiarism / spam publishing | Out of scope for v1. See Roadmap: stake-to-publish + slashing. |
-
-**Known limitations**
-- Unidirectional channel: the last un-settled increment is the author's risk if
-  the reader closes first. Bounded by voucher cadence.
-- Client-side attention detection (focus/scroll) is advisory. It protects the
-  *reader's* wallet; it is not a payout oracle and does not need to be trusted by
-  the author.
-- No on-chain "reading proof". Time-on-page is inherently client-reported; the
-  economic model is what makes that acceptable.
-- Not yet audited. Do not use on mainnet with real value.
-
----
-
-## Client-side integration
-
-Use [`@attention-press/reader-sdk`](packages/reader-sdk) — its `AttentionMeter`
-opens the session, tracks engagement (focus / scroll / idle / `visibilitychange`),
-signs a voucher every ~5s with an in-memory ephemeral key, and closes the session
-on `stop()`.
-
-```ts
-import { AttentionMeter } from "@attention-press/reader-sdk";
-
-const meter = new AttentionMeter({
-  contractAddress, chainId: 10143, articleId, ratePerSec, budget,
-  provider: window.ethereum,
-  target: document.querySelector("article") ?? undefined,
-  onVoucher: (v) => fetch("/api/vouchers", { method: "POST", body: JSON.stringify(v) }),
-});
-meter.on("voucher:signed", ({ cumulativeAmount }) => updateSpendMeter(cumulativeAmount));
-await meter.start();
-// … reader reads …
-await meter.stop();
-```
-
----
-
-## Getting started
-
-```bash
-npm install                     # workspace root — installs every package
-npm test                        # contracts 12 · reader-sdk 26 · collector 32 · web 5
-npm run build                   # hardhat compile + tsup + tsc + next build
-```
-
-Run the stack against Monad testnet:
-
-```bash
-# 1. collector — POSTs vouchers become settle() txs
-cd packages/collector && cp .env.example .env   # set SETTLER_PRIVATE_KEY
-npm run build && npm start                      # :8787
-
-# 2. frontend
-cd packages/web && cp .env.example .env.local   # addresses default to the deployed contracts
-npm run build -w @attention-press/reader-sdk    # web consumes its dist/
-npm run dev -w @attention-press/web             # http://localhost:3000
-```
-
-Deploy to Monad testnet:
-
-```bash
-cd packages/contracts
-cp .env.example .env             # set DEPLOYER_KEY, verify MONAD_RPC_URL / chainId
-npm run deploy:monad
-```
-
-The deploy script deploys `AttentionStream` with the deployer as treasury. It
-reuses `ARTICLE_REGISTRY` and `PAYMENT_TOKEN` when set (the current testnet
-deployment points at canonical **WMON**, `0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541`),
-and otherwise deploys a fresh `ArticleRegistry` / `MockERC20`.
-
-> Verify the current Monad testnet RPC URL and chain id before deploying — the
-> values in `packages/contracts/hardhat.config.ts` (chainId `10143`,
-> `https://testnet-rpc.monad.xyz`) are placeholders to confirm.
-
----
-
-## Layout
-
-```
-packages/
-  contracts/
-    contracts/
-      ArticleRegistry.sol        registry of published articles
-      AttentionStream.sol        per-session payment channel + fees + timeouts
-      interfaces/IArticleRegistry.sol
-      mocks/MockERC20.sol        test/testnet payment token
-    scripts/deploy.ts
-    test/attention.test.ts       registry, voucher settlement, caps, timeout, self-farm
-  reader-sdk/
-    src/
-      AttentionMeter.ts          orchestrator + typed events
-      engagement/                visibility + focus + idle + scroll tracking
-      session/                   ephemeral key, EIP-712 voucher, accrual math
-      chain/                     openSession / closeSession via EIP-1193
-    test/                        voucher digest, accrual clamps, engagement, lifecycle
-  collector/
-    src/
-      routes.ts                  POST /vouchers, GET /sessions/:id, /authors/:a/earnings
-      voucher.ts                 EIP-712 recover + contract-mirroring validation
-      settleLoop.ts              interval task: settle sessions with pending vouchers
-      chain.ts store.ts config.ts
-    test/                        voucher validation, store snapshot, settle loop, HTTP routes
-  web/
-    src/app/                     / (discovery), /publish, /article/[id]
-    src/components/              ReaderClient (mounts AttentionMeter) + SpendMeter, PublishForm
-    src/lib/                     chain defs/abis, wagmi config, data-URI metadata, formatting
-```
-
-### Deployed (Monad testnet, chainId 10143)
-
-See [`packages/contracts/deployments/monadTestnet.json`](packages/contracts/deployments/monadTestnet.json).
-`AttentionStream` `0xca364C7eC309c293216B43f6C069Ee9c5b6959cc` ·
-`ArticleRegistry` `0x34C48D04c566131aEa6DBA8E2727423A55e38aaa` ·
-payment token = WMON `0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541`.
+**`ArticleActions`:** never custodies the token (every payment is a direct
+`transferFrom(payer → recipient)`); `nonReentrant` + `whenNotPaused` +
+checks-effects-interactions on all five actions; `msg.sender != authorOf(id)`;
+one like / dislike / favorite per `(wallet, article)`; `treasury` **immutable**;
+constant prices; `actionFeeBps` ≤ 10% (re-checked in the setter);
+`MAX_REPLY_BYTES` = 1000, `MAX_REPLIES_PER_ARTICLE` = 100 000.
 
 ---
 
 ## Roadmap
 
-1. ~~**Reader SDK**~~ — done: `@attention-press/reader-sdk`.
-2. ~~**Author collector service**~~ — done: `@attention-press/collector`.
-3. ~~**Next.js frontend**~~ — done: `@attention-press/web` (discovery, publish, reader view + live spend meter). Follow-ups: real IPFS pin, per-read rate/budget controls.
-4. **Indexer/subgraph** — leaderboards, per-article retention curves ("engagement", not just clicks).
-5. **Stake-to-publish** — refundable deposit, slashable by a plagiarism/DMCA challenge, to price out spam.
-6. **Native MON support** — a wrapper so readers can stream MON directly without approving an ERC-20.
-7. **Splitters** — `transferAuthorship` to a 0xSplits-style contract for co-authors.
-8. **Audit** before any mainnet deployment.
-```
+Done: reader SDK · collector (auto-settle + key custody + reply index) · web
+(discovery, publish, reader view, profiles, paid actions + standing allowance).
+
+Next:
+
+1. **Real IPFS/Arweave** pinning + gateway fetch for article bodies.
+2. **Subgraph / indexer** — leaderboards, per-article retention curves.
+3. **Threshold key release** — remove the collector as a trusted decryptor.
+4. **Native MON** streaming without an ERC-20 approve step.
+5. **Stake-to-publish** — refundable deposit, slashable by a plagiarism/DMCA
+   challenge, to price out spam.
+6. **Splitters** — `transferAuthorship` to a 0xSplits-style contract.
+7. **Audit** + timelocked-multisig ownership before any mainnet deployment.
