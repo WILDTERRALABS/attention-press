@@ -71,13 +71,25 @@ publish time; the session budget is derived (rate × 10-minute cap).
 - Inline data-URI metadata only. Articles published with `ipfs://` metadata show
   a placeholder — wire a gateway fetch + a real pin path next.
 - Reply history depends on a single collector's index being up.
-- `next lint` is not configured — `next build` drops into an interactive setup
-  prompt. CI relies on `tsc` + `next build` + vitest.
+- `next lint` / ESLint is not wired up (no `eslint` dep). `next build` skips lint
+  entirely; CI relies on `tsc` + `next build` + vitest.
 
 ## Develop
 
 ```bash
 npm test -w @attention-press/web        # 24 — format + metadata + rate + author helpers
 npm run typecheck -w @attention-press/web
-npm run build -w @attention-press/web   # also runs type-checking
+npm run build -w @attention-press/web   # prebuild builds the reader-sdk, then next build (type-checks)
 ```
+
+## Deploy (Vercel)
+
+Set **Root Directory** to `packages/web` in the Vercel project. The `prebuild`
+script builds `@attention-press/reader-sdk` (whose `dist/` is gitignored) before
+`next build`, so no extra Build Command override is needed. Then set the
+`NEXT_PUBLIC_*` env vars (see `.env.example`) — `NEXT_PUBLIC_RPC_URL` and
+`NEXT_PUBLIC_COLLECTOR_URL` must point at your hosted RPC and collector; the
+contract-address vars fall back to the deployed testnet addresses in code.
+`NEXT_PUBLIC_*` values are inlined at build time — changing one needs a redeploy.
+The collector is a stateful long-running service and must be hosted elsewhere
+(Railway / Render / Fly / VPS), with the Vercel URL added to its `ALLOWED_ORIGINS`.
