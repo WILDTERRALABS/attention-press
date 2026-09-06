@@ -43,3 +43,6 @@ yarn-error.log*
 .agents/
 .claude/skills/
 skills-lock.json
+
+.vercel
+.env*
