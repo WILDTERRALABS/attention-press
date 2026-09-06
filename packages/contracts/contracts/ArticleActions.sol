@@ -98,6 +98,10 @@ contract ArticleActions is Ownable, Pausable, ReentrancyGuard {
     error BadParams();
     error UnknownReply();
     error ReplyLimitReached();
+    /// @dev Payment recipient may not be this contract — it has no withdrawal
+    ///      path, so funds sent here (e.g. via `transferAuthorship` to this
+    ///      address) would be permanently locked.
+    error InvalidRecipient();
 
     constructor(IERC20 _token, IArticleRegistry _registry, address _treasury, uint16 _feeBps) Ownable(msg.sender) {
         if (address(_token) == address(0) || address(_registry) == address(0) || _treasury == address(0)) {
@@ -216,16 +220,20 @@ contract ArticleActions is Ownable, Pausable, ReentrancyGuard {
     // Internals
     // ---------------------------------------------------------------------------
 
-    /// @dev Reverts unless the article is active and the caller is not its author.
+    /// @dev Reverts unless the article is active, the caller is not its author,
+    ///      and the author is not this contract (a `transferAuthorship` to this
+    ///      address would otherwise let actions lock funds here forever).
     function _actionableAuthor(uint256 articleId) internal view returns (address author) {
         if (!registry.isActive(articleId)) revert ArticleInactive();
         author = registry.authorOf(articleId);
+        if (author == address(this)) revert InvalidRecipient();
         if (msg.sender == author) revert SelfAction();
     }
 
     /// @dev Pulls `price` from the caller: `price - fee` to the author, `fee` to
     ///      the treasury. Interactions only — call after all state writes.
     function _payAuthor(address author, uint256 price) internal returns (uint256 fee) {
+        if (author == address(this)) revert InvalidRecipient(); // defence in depth
         fee = (price * actionFeeBps) / 10_000;
         token.safeTransferFrom(msg.sender, author, price - fee);
         if (fee > 0) token.safeTransferFrom(msg.sender, treasury, fee);

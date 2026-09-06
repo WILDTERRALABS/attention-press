@@ -239,6 +239,29 @@ describe("ArticleActions", () => {
       expect(await actions.hasLiked(articleId, reader2.address)).to.equal(false);
       expect(await actions.likeCount(articleId)).to.equal(0n);
     });
+
+    it("rejects an article whose author is this contract — no funds locked (3.2 / 3.4)", async () => {
+      const { author, reader, registry, token, actions, actionsAddr, articleId } = await deploy();
+      // attacker moves authorship to the ArticleActions contract itself
+      await registry.connect(author).transferAuthorship(articleId, actionsAddr);
+
+      for (const fn of [
+        () => actions.connect(reader).like(articleId),
+        () => actions.connect(reader).dislike(articleId),
+        () => actions.connect(reader).favorite(articleId),
+        () => actions.connect(reader).reply(articleId, "locked?"),
+        () => actions.connect(reader).tip(articleId, ONE),
+      ]) {
+        await expect(fn()).to.be.revertedWithCustomError(actions, "InvalidRecipient");
+      }
+
+      // nothing recorded, nothing moved
+      expect(await actions.likeCount(articleId)).to.equal(0n);
+      expect(await actions.favoriteCount(articleId)).to.equal(0n);
+      expect(await actions.replyCount(articleId)).to.equal(0n);
+      expect(await actions.hasLiked(articleId, reader.address)).to.equal(false);
+      expect(await token.balanceOf(actionsAddr)).to.equal(0n);
+    });
   });
 
   describe("admin", () => {

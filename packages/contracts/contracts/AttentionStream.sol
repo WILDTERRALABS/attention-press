@@ -17,6 +17,19 @@ import {IArticleRegistry} from "./interfaces/IArticleRegistry.sol";
 ///         The author redeems the latest voucher on-chain; the reader is refunded
 ///         whatever budget was not streamed.
 ///
+/// @dev    Closing is two-phase, so a reader cannot end the session and walk away
+///         before the author's collector settles the last voucher:
+///           1. `closeSession(id)` records an accrual cutoff (`closeInitiatedAt`)
+///              and does NOT refund. Accrual is frozen at that timestamp.
+///           2. For `challengeWindow` seconds anyone may still `settle` vouchers
+///              the session key signed at or before the cutoff.
+///           3. `finalizeSession(id)` (permissionless) then refunds
+///              `budget - claimed` to the reader and closes the channel.
+///         A collector-less reader recovers funds unilaterally:
+///         `closeSession` -> wait `challengeWindow` -> `finalizeSession`. An
+///         abandoned session can be force-closed by anyone once
+///         `MAX_ACCRUAL_WINDOW` has elapsed.
+///
 /// @dev    Trust model
 ///         - No proof-of-personhood / anti-sybil machinery. Because the reader
 ///           funds the stream and value flows reader -> author, a publisher who
@@ -26,11 +39,6 @@ import {IArticleRegistry} from "./interfaces/IArticleRegistry.sol";
 ///           tab loses focus. This is bounded on-chain by `budget` (hard cap) and
 ///           `ratePerSec` (accrual cap). Keep default budgets small and session
 ///           lengths short in the UI.
-///         - Vouchers must be streamed to the author's collector in real time.
-///           The author calls `settle` to ratchet `claimed` up; the reader can
-///           never `closeSession` below `claimed`. The last un-settled increment
-///           (<= one voucher interval) is the author's risk if the reader closes
-///           first — keep the voucher cadence tight (~5s).
 contract AttentionStream is EIP712, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -38,10 +46,11 @@ contract AttentionStream is EIP712, Ownable, ReentrancyGuard {
     bytes32 private constant VOUCHER_TYPEHASH = keccak256("Voucher(bytes32 sessionId,uint256 cumulativeAmount)");
 
     uint16 public constant MAX_FEE_BPS = 1_000; // 10%
-    uint64 public constant MIN_TIMEOUT = 1 days;
-    uint64 public constant MAX_TIMEOUT = 30 days;
+    uint64 public constant MIN_CHALLENGE_WINDOW = 1 minutes;
+    uint64 public constant MAX_CHALLENGE_WINDOW = 1 days;
     /// @dev Upper bound on how far `ratePerSec` accrual is allowed to run, so a
     ///      never-closed session cannot be drained at full rate indefinitely.
+    ///      Also the point after which anyone may force-close an abandoned session.
     uint64 public constant MAX_ACCRUAL_WINDOW = 7 days;
 
     IERC20 public immutable token;
@@ -49,8 +58,9 @@ contract AttentionStream is EIP712, Ownable, ReentrancyGuard {
 
     address public treasury;
     uint16 public protocolFeeBps;
-    /// @notice After this long, the reader may reclaim unclaimed escrow with no voucher.
-    uint64 public sessionTimeout = 3 days;
+    /// @notice Seconds after `closeSession` during which vouchers may still settle
+    ///         before `finalizeSession` refunds the reader.
+    uint64 public challengeWindow = 15 minutes;
 
     struct Session {
         address reader; // escrow owner + refund recipient
@@ -65,6 +75,9 @@ contract AttentionStream is EIP712, Ownable, ReentrancyGuard {
     }
 
     mapping(bytes32 => Session) public sessions;
+    /// @notice 0 while live; the timestamp `closeSession` was called otherwise.
+    ///         Freezes accrual at that instant and starts the challenge window.
+    mapping(bytes32 => uint64) public closeInitiatedAt;
     /// @notice Per-reader counter feeding session id derivation.
     mapping(address => uint256) public openCount;
 
@@ -84,22 +97,28 @@ contract AttentionStream is EIP712, Ownable, ReentrancyGuard {
         uint64 ratePerSec
     );
     event Settled(bytes32 indexed id, uint256 indexed articleId, uint96 cumulativeAmount, uint96 delta, uint96 fee);
+    /// @notice Phase 1: accrual frozen at `initiatedAt`, challenge window running.
+    event SessionClosing(bytes32 indexed id, uint256 indexed articleId, uint64 initiatedAt);
+    /// @notice Phase 2: reader refunded, channel closed.
     event SessionClosed(
         bytes32 indexed id, uint256 indexed articleId, uint96 totalPaid, uint96 refunded, uint64 duration
     );
     event TreasuryUpdated(address treasury);
     event ProtocolFeeUpdated(uint16 bps);
-    event SessionTimeoutUpdated(uint64 timeout);
+    event ChallengeWindowUpdated(uint64 window);
 
     error ArticleInactive();
     error BadParams();
     error NotReader();
     error SessionNotOpen();
+    error AlreadyClosing();
+    error NotClosing();
+    error ChallengeWindowOpen();
+    error ChallengeWindowClosed();
     error NonMonotonic();
     error OverBudget();
     error RateExceeded();
     error BadSignature();
-    error TooEarly();
 
     constructor(IERC20 _token, IArticleRegistry _registry, address _treasury, uint16 _feeBps)
         EIP712("AttentionStream", "1")
@@ -160,38 +179,57 @@ contract AttentionStream is EIP712, Ownable, ReentrancyGuard {
 
     /// @notice Ratchet the amount streamed to the author up to `cumulativeAmount`.
     /// @dev Permissionless: normally called by the author's collector service.
+    ///      Works while the session is live and, once closing, until
+    ///      `closeInitiatedAt + challengeWindow`. Accrual is capped at the close
+    ///      timestamp during the window, so no post-close voucher can help the
+    ///      reader.
     function settle(bytes32 id, uint96 cumulativeAmount, bytes calldata sig) external nonReentrant {
         Session storage s = sessions[id];
         if (!s.open) revert SessionNotOpen();
+
+        uint64 cAt = closeInitiatedAt[id];
+        if (cAt != 0 && block.timestamp > uint256(cAt) + challengeWindow) revert ChallengeWindowClosed();
+
         _verify(id, s.signer, cumulativeAmount, sig);
-        _applySettlement(id, s, cumulativeAmount);
+        _applySettlement(id, s, cumulativeAmount, cAt != 0 ? cAt : block.timestamp);
     }
 
-    /// @notice Reader ends the session: settle the final voucher (if any) and
-    ///         refund the unspent budget.
-    /// @param cumulativeAmount pass the latest voucher value, or the current
-    ///        `claimed` with empty `sig` to settle nothing.
-    function closeSession(bytes32 id, uint96 cumulativeAmount, bytes calldata sig) external nonReentrant {
+    /// @notice Phase 1 of closing: freeze accrual and start the challenge window.
+    ///         Does NOT refund. Callable by the reader any time, or by anyone once
+    ///         `MAX_ACCRUAL_WINDOW` has elapsed (abandoned-session recovery).
+    function closeSession(bytes32 id) external nonReentrant {
         Session storage s = sessions[id];
         if (!s.open) revert SessionNotOpen();
-        if (msg.sender != s.reader) revert NotReader();
+        if (closeInitiatedAt[id] != 0) revert AlreadyClosing();
 
-        if (cumulativeAmount != s.claimed) {
-            _verify(id, s.signer, cumulativeAmount, sig);
-            _applySettlement(id, s, cumulativeAmount);
+        bool abandoned = block.timestamp >= uint256(s.startTime) + MAX_ACCRUAL_WINDOW;
+        if (msg.sender != s.reader && !abandoned) revert NotReader();
+
+        closeInitiatedAt[id] = uint64(block.timestamp);
+        emit SessionClosing(id, s.articleId, uint64(block.timestamp));
+    }
+
+    /// @notice Phase 2: after the challenge window, refund `budget - claimed` to
+    ///         the reader and close the channel. Permissionless.
+    function finalizeSession(bytes32 id) external nonReentrant {
+        Session storage s = sessions[id];
+        if (!s.open) revert SessionNotOpen();
+
+        uint64 cAt = closeInitiatedAt[id];
+        if (cAt == 0) revert NotClosing();
+        if (block.timestamp <= uint256(cAt) + challengeWindow) revert ChallengeWindowOpen();
+
+        s.open = false; // effects before interactions
+
+        uint96 refund = s.budget - s.claimed;
+        uint64 duration = cAt - s.startTime;
+
+        unchecked {
+            articleReaderSeconds[s.articleId] += duration;
         }
-        _finalize(id, s);
-    }
 
-    /// @notice Safety hatch: once `sessionTimeout` has passed the reader recovers
-    ///         all unclaimed escrow without needing a voucher. The author had the
-    ///         full window to `settle` any vouchers they held.
-    function readerReclaim(bytes32 id) external nonReentrant {
-        Session storage s = sessions[id];
-        if (!s.open) revert SessionNotOpen();
-        if (msg.sender != s.reader) revert NotReader();
-        if (block.timestamp < uint256(s.startTime) + sessionTimeout) revert TooEarly();
-        _finalize(id, s);
+        if (refund > 0) token.safeTransfer(s.reader, refund);
+        emit SessionClosed(id, s.articleId, s.claimed, refund, duration);
     }
 
     // ---------------------------------------------------------------------------
@@ -203,19 +241,20 @@ contract AttentionStream is EIP712, Ownable, ReentrancyGuard {
         if (ECDSA.recover(digest, sig) != signer) revert BadSignature();
     }
 
-    /// @dev Largest `cumulativeAmount` permitted by the rate cap at the current time.
-    function _maxAccrued(Session storage s) internal view returns (uint256) {
+    /// @dev Largest `cumulativeAmount` the rate cap permits, measured to
+    ///      `referenceTs` (wall clock while live, the close timestamp once closing).
+    function _maxAccrued(Session storage s, uint256 referenceTs) internal view returns (uint256) {
         uint256 endCap = uint256(s.startTime) + MAX_ACCRUAL_WINDOW;
-        uint256 nowTs = block.timestamp < endCap ? block.timestamp : endCap;
+        uint256 nowTs = referenceTs < endCap ? referenceTs : endCap;
         uint256 elapsed = nowTs - s.startTime;
         // +1s slack absorbs clock skew between the signer and the chain.
         return uint256(s.ratePerSec) * (elapsed + 1);
     }
 
-    function _applySettlement(bytes32 id, Session storage s, uint96 cumulativeAmount) internal {
+    function _applySettlement(bytes32 id, Session storage s, uint96 cumulativeAmount, uint256 referenceTs) internal {
         if (cumulativeAmount < s.claimed) revert NonMonotonic();
         if (cumulativeAmount > s.budget) revert OverBudget();
-        if (cumulativeAmount > _maxAccrued(s)) revert RateExceeded();
+        if (cumulativeAmount > _maxAccrued(s, referenceTs)) revert RateExceeded();
 
         uint96 delta = cumulativeAmount - s.claimed;
         s.claimed = cumulativeAmount; // effects before interactions
@@ -230,19 +269,6 @@ contract AttentionStream is EIP712, Ownable, ReentrancyGuard {
             token.safeTransfer(s.author, delta - fee);
         }
         emit Settled(id, s.articleId, cumulativeAmount, delta, fee);
-    }
-
-    function _finalize(bytes32 id, Session storage s) internal {
-        s.open = false; // effects before interactions
-        uint96 refund = s.budget - s.claimed;
-        uint64 duration = uint64(block.timestamp) - s.startTime;
-
-        unchecked {
-            articleReaderSeconds[s.articleId] += duration;
-        }
-
-        if (refund > 0) token.safeTransfer(s.reader, refund);
-        emit SessionClosed(id, s.articleId, s.claimed, refund, duration);
     }
 
     // ---------------------------------------------------------------------------
@@ -261,10 +287,10 @@ contract AttentionStream is EIP712, Ownable, ReentrancyGuard {
         emit ProtocolFeeUpdated(bps);
     }
 
-    function setSessionTimeout(uint64 t) external onlyOwner {
-        if (t < MIN_TIMEOUT || t > MAX_TIMEOUT) revert BadParams();
-        sessionTimeout = t;
-        emit SessionTimeoutUpdated(t);
+    function setChallengeWindow(uint64 w) external onlyOwner {
+        if (w < MIN_CHALLENGE_WINDOW || w > MAX_CHALLENGE_WINDOW) revert BadParams();
+        challengeWindow = w;
+        emit ChallengeWindowUpdated(w);
     }
 
     // ---------------------------------------------------------------------------
@@ -280,9 +306,13 @@ contract AttentionStream is EIP712, Ownable, ReentrancyGuard {
     function claimableFor(bytes32 id, uint96 cumulativeAmount) external view returns (uint96) {
         Session storage s = sessions[id];
         if (!s.open || cumulativeAmount <= s.claimed) return 0;
+
+        uint64 cAt = closeInitiatedAt[id];
+        if (cAt != 0 && block.timestamp > uint256(cAt) + challengeWindow) return 0;
+
         uint256 capped = cumulativeAmount;
         if (capped > s.budget) capped = s.budget;
-        uint256 rateCap = _maxAccrued(s);
+        uint256 rateCap = _maxAccrued(s, cAt != 0 ? cAt : block.timestamp);
         if (capped > rateCap) capped = rateCap;
         if (capped <= s.claimed) return 0;
         return uint96(capped - s.claimed);

@@ -11,9 +11,19 @@ document alone — see "The gap" below.
 | Contract | Handles value? | Notes |
 | --- | --- | --- |
 | `ArticleRegistry` | no | Author + contentHash + metadata pointer. Token-free. |
-| `AttentionStream` | yes (WMON escrow) | Streaming pay-per-second reading. Reviewed; unchanged. |
-| `ArticleActions` | yes (WMON, no custody) | Discrete paid actions: like / dislike / favorite / reply / tip. |
+| `AttentionStream` | yes (WMON escrow) | Streaming pay-per-second reading. **Two-phase closure** (see below) landed after an external AI audit (Savant.chat) flagged close/settle races. |
+| `ArticleActions` | yes (WMON, no custody) | Discrete paid actions. `_payAuthor` / `_actionableAuthor` now reject `address(this)` as the recipient. |
 | `MockERC20`, `ReentrantERC20` | test only | Never deployed to a real network. |
+
+## External audit — Savant.chat (AI), findings addressed
+
+| # | Finding | Fix |
+| --- | --- | --- |
+| 3.2 / 3.4 | `ArticleActions` funds locked forever if an article's author is set (via `ArticleRegistry.transferAuthorship`) to the `ArticleActions` contract — actions still increment counts / record replies while the WMON is stuck. | `_actionableAuthor` **and** `_payAuthor` revert `InvalidRecipient` when `author == address(this)`. No state written, no transfer. |
+| 3.1 / 3.3 / 3.5 / 3.6 | Reader can `closeSession` at a stale `cumulativeAmount` (or `== claimed` with empty sig, skipping `_verify`) and front-run the collector's `settle` of the latest voucher; once `open == false` the settle reverts and the author loses the un-settled delta. `readerReclaim` had the same shape after the timeout. | **Two-phase closure.** `closeSession(id)` takes no voucher — it only records `closeInitiatedAt` and freezes accrual at that timestamp. For `challengeWindow` (default 15 min, owner-settable `[1 min, 1 day]`) anyone may still `settle` vouchers signed at/before the cutoff; `_maxAccrued` is measured to `closeInitiatedAt`, not `now`, so nothing signed after close helps the reader. `finalizeSession(id)` (permissionless) then refunds `budget − claimed`. `readerReclaim` / `sessionTimeout` removed — a collector-less reader recovers via `closeSession → wait → finalizeSession`; an abandoned session is force-closeable by anyone after `MAX_ACCRUAL_WINDOW`. |
+
+Regression tests for all of the above are in `test/attention.test.ts` and
+`test/articleActions.test.ts`.
 
 `ArticleActions` is standalone: it only **reads** `IArticleRegistry`
 (`isActive`, `authorOf`) and never calls / is called by `AttentionStream`, so
@@ -60,6 +70,7 @@ deploying it cannot affect sessions or the streaming flow. `git diff` on
 | Sock-puppet inflation of like/favorite **counts** | Each fake action costs `actionFeeBps` of real WMON (the same defense `AttentionStream` uses for self-farming). `SelfAction` blocks the trivial same-address case. |
 | `pause()` is owner centralization (owner can freeze all interactions) | Standard emergency stop for a funds contract. **Mainnet requires `owner` = a timelocked multisig.** Testnet uses an EOA. |
 | `block.timestamp` in the reply record | Display-only; never gates logic. Slither does not flag it. |
+| `AttentionStream` uses `block.timestamp` for the accrual cap, `challengeWindow`, and the `MAX_ACCRUAL_WINDOW` abandoned-session threshold (Slither `timestamp`, 8 sites) | A validator can nudge `block.timestamp` by a few seconds at most. The challenge window is 15 min and the accrual window 7 days, so seconds of skew are economically irrelevant. Inherent to a pay-per-second channel. |
 
 ## What was done
 
@@ -75,8 +86,10 @@ deploying it cannot affect sessions or the streaming flow. `git diff` on
   during a live session leave the session's `claimed` / `articleEarned`
   byte-identical.
 - **Static analysis**: `slither .` (v0.11.6) — **zero findings on
-  `ArticleActions.sol`** (`npm run slither`, needs `pip install
-  slither-analyzer`). `solhint` — **zero errors** (`npm run lint:sol`).
+  `ArticleActions.sol`**; on `AttentionStream.sol` only informational
+  `timestamp` comparisons (accepted, table above) and one pre-existing
+  `unindexed-event-address` on `TreasuryUpdated`. `solhint` — **zero errors**
+  (`npm run lint:sol`).
 - **Containment check**: grep-confirmed `ArticleActions` only reads
   `IArticleRegistry`; no other `.sol` changed.
 - **Testnet canary**: `scripts/actions-smoke.ts` runs the full action set +
