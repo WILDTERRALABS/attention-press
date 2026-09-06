@@ -108,16 +108,81 @@ async function main() {
   assertEq(sess.claimed, cumulative, "session.claimed == cumulative");
   assertEq(await streamAsDeployer.articleEarned(articleId), cumulative, "articleEarned == cumulative");
 
-  // --- closeSession ------------------------------------------------------
-  await (await streamAsReader.closeSession(sessionId, cumulative, signature)).wait();
-  const closed = await streamAsDeployer.sessions(sessionId);
-  const readerFinal: bigint = await tokenAsReader.balanceOf(reader.address);
-  console.log(`\ncloseSession: open now ${closed.open}`);
-  assertEq(closed.open, false, "session.open == false after close");
-  assertEq(readerAfterOpen + (budget - cumulative), readerFinal, "reader refunded budget - cumulative");
-  assertEq(readerFinal, fund - cumulative, "reader net token spend == cumulative");
+  // --- two-phase closure ----------------------------------------------------
+  // Shrink the challenge window so the canary doesn't wait 15 minutes.
+  const origWindow: bigint = await streamAsDeployer.challengeWindow();
+  await (await streamAsDeployer.setChallengeWindow(60)).wait();
+  console.log(`\nchallengeWindow ${origWindow} -> 60s for the canary`);
 
-  console.log("\n✅ full loop OK: fund → publish → openSession → voucher → settle → closeSession");
+  try {
+    // phase 1: closeSession takes no voucher, only freezes accrual
+    await (await streamAsReader.closeSession(sessionId)).wait();
+    const closing = await streamAsDeployer.sessions(sessionId);
+    const cAt: bigint = await streamAsDeployer.closeInitiatedAt(sessionId);
+    console.log(`closeSession: open ${closing.open}, closeInitiatedAt ${cAt}`);
+    assertEq(closing.open, true, "session still open during the challenge window");
+    assertEq(cAt > 0n, true, "closeInitiatedAt recorded");
+
+    // a fresh voucher signed at/under the close-time cap still settles in the window
+    const inWindow = 7n * ratePerSec;
+    const sig2 = await sessionKey.signTypedData(domain, types, { sessionId, cumulativeAmount: inWindow });
+    const dBefore = await tokenAsReader.balanceOf(deployer.address);
+    await (await streamAsDeployer.settle(sessionId, inWindow, sig2)).wait();
+    assertEq((await streamAsDeployer.sessions(sessionId)).claimed, inWindow, "in-window settle raised claimed");
+    assertEq((await tokenAsReader.balanceOf(deployer.address)) - dBefore, inWindow - cumulative, "author paid the in-window delta");
+
+    // finalize before the window elapses -> revert
+    await assertReverts(() => streamAsReader.finalizeSession(sessionId), "ChallengeWindowOpen", "finalize before window");
+
+    console.log("waiting 65s for the challenge window to elapse...");
+    await new Promise((r) => setTimeout(r, 65_000));
+
+    // settle after the window -> revert
+    const late = 9n * ratePerSec;
+    const sig3 = await sessionKey.signTypedData(domain, types, { sessionId, cumulativeAmount: late });
+    await assertReverts(() => streamAsDeployer.settle(sessionId, late, sig3), "ChallengeWindowClosed", "settle after window");
+
+    // phase 2: permissionless finalize refunds budget - claimed
+    await (await streamAsDeployer.finalizeSession(sessionId)).wait();
+    const closed = await streamAsDeployer.sessions(sessionId);
+    const readerFinal: bigint = await tokenAsReader.balanceOf(reader.address);
+    console.log(`finalizeSession: open now ${closed.open}`);
+    assertEq(closed.open, false, "session.open == false after finalize");
+    assertEq(readerFinal, readerAfterOpen + (budget - inWindow), "reader refunded budget - claimed");
+    assertEq(readerFinal, fund - inWindow, "reader net token spend == claimed");
+  } finally {
+    await (await streamAsDeployer.setChallengeWindow(origWindow)).wait();
+    console.log(`challengeWindow restored to ${origWindow}`);
+  }
+
+  console.log("\n✅ full loop OK: fund → publish → openSession → voucher → settle → close → window → finalize");
+}
+
+async function assertReverts(fn: () => Promise<unknown>, want: string, label: string) {
+  try {
+    const tx = (await fn()) as { wait?: () => Promise<unknown> };
+    if (tx?.wait) await tx.wait();
+  } catch (e) {
+    const err = e as {
+      revert?: { name?: string };
+      shortMessage?: string;
+      data?: string;
+      info?: { error?: { data?: string } };
+    };
+    const name =
+      err?.revert?.name ??
+      err?.shortMessage?.match(/custom error '([A-Za-z0-9_]+)/)?.[1] ??
+      null;
+    if (name === want) {
+      console.log(`  ✓ ${label} reverts ${name}`);
+    } else if (name === null) {
+      console.log(`  ⚠ ${label} reverted, but the RPC did not surface the name (expected ${want})`);
+    } else {
+      throw new Error(`${label}: expected ${want}, got ${name}`);
+    }
+    return;
+  }
+  throw new Error(`${label}: expected revert ${want}, did not revert`);
 }
 
 function assertEq(a: unknown, b: unknown, label: string) {

@@ -96,10 +96,21 @@ async function main() {
   const wrapTotal = w1Fund + w2Fund;
   const gas1 = ethers.parseEther("0.4");
   const gas2 = ethers.parseEther("0.3");
-  const need = wrapTotal + gas1 + gas2 + ethers.parseEther("0.4");
+
+  const tokenD = new ethers.Contract(tokenAddr, wethAbi, deployer);
+  const tokenW1 = new ethers.Contract(tokenAddr, wethAbi, w1);
+  const tokenW2 = new ethers.Contract(tokenAddr, wethAbi, w2);
+
+  // Prefer the deployer's existing WMON; only wrap the shortfall.
+  const depWmon: bigint = await tokenD.balanceOf(deployer.address);
+  const toWrap = depWmon >= wrapTotal ? 0n : wrapTotal - depWmon;
+  const need = toWrap + gas1 + gas2 + ethers.parseEther("0.4");
 
   const depMon = await ethers.provider.getBalance(deployer.address);
-  console.log(`\nDeployer MON balance: ${ethers.formatEther(depMon)} (need ~${ethers.formatEther(need)})`);
+  console.log(
+    `\nDeployer: ${ethers.formatEther(depMon)} MON, ${ethers.formatUnits(depWmon, 18)} WMON ` +
+      `(need ~${ethers.formatEther(need)} MON; wrapping ${ethers.formatUnits(toWrap, 18)})`,
+  );
   if (depMon < need) {
     throw new Error(`deployer needs ~${ethers.formatEther(need)} MON — fund ${deployer.address} from the faucet and re-run`);
   }
@@ -108,12 +119,11 @@ async function main() {
   await (await deployer.sendTransaction({ to: w1.address, value: gas1 })).wait();
   await (await deployer.sendTransaction({ to: w2.address, value: gas2 })).wait();
 
-  // --- wrap + distribute WMON (Monad applies state after the receipt) ------
-  const tokenD = new ethers.Contract(tokenAddr, wethAbi, deployer);
-  const tokenW1 = new ethers.Contract(tokenAddr, wethAbi, w1);
-  const tokenW2 = new ethers.Contract(tokenAddr, wethAbi, w2);
-  await (await tokenD.deposit({ value: wrapTotal })).wait();
-  await waitForBalance(tokenD, deployer.address, wrapTotal, "deployer WMON");
+  // --- wrap the shortfall + distribute WMON (Monad applies state after receipt) ---
+  if (toWrap > 0n) {
+    await (await tokenD.deposit({ value: toWrap })).wait();
+    await waitForBalance(tokenD, deployer.address, wrapTotal, "deployer WMON");
+  }
   await (await tokenD.transfer(w1.address, w1Fund)).wait();
   await (await tokenD.transfer(w2.address, w2Fund)).wait();
   await waitForBalance(tokenW1, w1.address, w1Fund, "w1 WMON");
@@ -351,6 +361,37 @@ async function main() {
       reverted && c1 === c0 && w1Bal === w0,
       `reverted=${reverted}; replyCount ${c0}->${c1}, actor balance ${w1Bal === w0 ? "unchanged" : "MOVED"}`,
     );
+  }
+
+  // =======================================================================
+  // 10. an article whose author is the contract -> InvalidRecipient, no lock
+  // =======================================================================
+  console.log("10. contract-authored article reverts InvalidRecipient");
+  {
+    const chash = ethers.keccak256(ethers.toUtf8Bytes(`actions-smoke-lock ${Date.now()}`));
+    const rc = await (await registryD.publish(chash, "ipfs://lock")).wait();
+    const ev = rc!.logs
+      .map((l: ParsableLog) => { try { return registryD.interface.parseLog(l); } catch { return null; } })
+      .find((e: { name: string } | null) => e?.name === "Published");
+    const lockId: bigint = ev!.args.id;
+    await (await registryD.transferAuthorship(lockId, actionsAddr)).wait();
+
+    const before = await bal(actionsAddr);
+    const a = await expectRevert("like", () => actionsW1.like(lockId), iface, "InvalidRecipient");
+    const b = await expectRevert("tip", () => actionsW1.tip(lockId, LIKE), iface, "InvalidRecipient");
+    const c = await expectRevert("reply", () => actionsW1.reply(lockId, "x"), iface, "InvalidRecipient");
+    await sleep(3000);
+    const stuck = (await bal(actionsAddr)) - before;
+    record(
+      "contract-authored article: all actions revert InvalidRecipient, nothing locked",
+      a && b && c && stuck === 0n && (await actionsD.likeCount(lockId)) === 0n,
+      `balanceOf(actions) delta ${ethers.formatUnits(stuck, 18)}`,
+    );
+    try {
+      await (await registryD.retire(lockId)).wait();
+    } catch {
+      /* best effort */
+    }
   }
 
   // --- tidy up: retire the canary article --------------------------------

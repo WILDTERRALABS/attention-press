@@ -14,6 +14,7 @@
     "deploy-actions:monad": "hardhat run scripts/deploy-actions.ts --network monadTestnet",
     "list-articles:monad": "hardhat run scripts/list-articles.ts --network monadTestnet",
     "retire:monad": "hardhat run scripts/retire-articles.ts --network monadTestnet",
+    "smoke:monad": "hardhat run scripts/smoke-testnet.ts --network monadTestnet",
     "actions-smoke:monad": "hardhat run scripts/actions-smoke.ts --network monadTestnet",
     "close-session:monad": "hardhat run scripts/close-session.ts --network monadTestnet"
   },
