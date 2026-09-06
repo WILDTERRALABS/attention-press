@@ -38,3 +38,8 @@ Thumbs.db
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Agent tooling (Vercel skills, etc.) — local only
+.agents/
+.claude/skills/
+skills-lock.json
