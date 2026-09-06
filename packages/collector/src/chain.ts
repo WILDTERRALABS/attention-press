@@ -45,6 +45,27 @@ export const streamAbi = [
     ],
     outputs: [],
   },
+  {
+    type: "function",
+    name: "finalizeSession",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "id", type: "bytes32" }],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "closeInitiatedAt",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "bytes32" }],
+    outputs: [{ name: "", type: "uint64" }],
+  },
+  {
+    type: "function",
+    name: "challengeWindow",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint64" }],
+  },
 ] as const;
 
 export const registryAbi = [
@@ -85,6 +106,7 @@ export class ViemChainAdapter implements ChainAdapter {
   private readonly pub: ReturnType<typeof createPublicClient>;
   private readonly wallet: ReturnType<typeof createWalletClient>;
   private readonly account: PrivateKeyAccount;
+  private challengeWindowCache: bigint | null = null;
 
   constructor(cfg: CollectorConfig) {
     this.chainId = cfg.chainId;
@@ -143,6 +165,14 @@ export class ViemChainAdapter implements ChainAdapter {
       : (t as Exclude<typeof t, readonly unknown[]>);
 
     if (s.reader === zeroAddress) return null;
+
+    const closeInitiatedAt = (await this.pub.readContract({
+      address: this.streamAddress,
+      abi: streamAbi,
+      functionName: "closeInitiatedAt",
+      args: [sessionId],
+    })) as bigint;
+
     return {
       reader: s.reader,
       signer: s.signer,
@@ -153,7 +183,19 @@ export class ViemChainAdapter implements ChainAdapter {
       startTime: BigInt(s.startTime),
       ratePerSec: BigInt(s.ratePerSec),
       open: Boolean(s.open),
+      closeInitiatedAt: BigInt(closeInitiatedAt),
     };
+  }
+
+  async getChallengeWindow(): Promise<bigint> {
+    if (this.challengeWindowCache === null) {
+      this.challengeWindowCache = (await this.pub.readContract({
+        address: this.streamAddress,
+        abi: streamAbi,
+        functionName: "challengeWindow",
+      })) as bigint;
+    }
+    return this.challengeWindowCache;
   }
 
   async getArticle(articleId: bigint): Promise<OnChainArticle | null> {
@@ -226,6 +268,19 @@ export class ViemChainAdapter implements ChainAdapter {
       abi: streamAbi,
       functionName: "settle",
       args: [sessionId, cumulativeAmount, signature],
+      chain: null,
+    });
+    await this.pub.waitForTransactionReceipt({ hash });
+    return hash;
+  }
+
+  async finalizeSession(sessionId: Hex): Promise<Hex> {
+    const hash = await this.wallet.writeContract({
+      account: this.account,
+      address: this.streamAddress,
+      abi: streamAbi,
+      functionName: "finalizeSession",
+      args: [sessionId],
       chain: null,
     });
     await this.pub.waitForTransactionReceipt({ hash });

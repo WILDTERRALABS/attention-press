@@ -1,6 +1,6 @@
 import type { Address, Hex } from "viem";
 
-/** `AttentionStream.sessions(id)` decoded. */
+/** `AttentionStream.sessions(id)` decoded, plus `closeInitiatedAt(id)`. */
 export interface OnChainSession {
   reader: Address;
   signer: Address;
@@ -11,6 +11,8 @@ export interface OnChainSession {
   startTime: bigint;
   ratePerSec: bigint;
   open: boolean;
+  /** 0 while live; the timestamp `closeSession` was called (challenge window running). */
+  closeInitiatedAt: bigint;
 }
 
 export interface VoucherInput {
@@ -100,6 +102,10 @@ export interface ChainAdapter {
   latestBlockTimestamp(): Promise<bigint>;
   /** Send `settle(sessionId, cumulativeAmount, signature)` and wait for the receipt. */
   settle(sessionId: Hex, cumulativeAmount: bigint, signature: Hex): Promise<Hex>;
+  /** Send phase-2 `finalizeSession(id)` (refund the reader) and wait for the receipt. */
+  finalizeSession(sessionId: Hex): Promise<Hex>;
+  /** `challengeWindow()` seconds — cached after the first read. */
+  getChallengeWindow(): Promise<bigint>;
   // --- reply indexer ---
   latestBlockNumber(): Promise<bigint>;
   /** `ArticleActions.Replied` logs in [fromBlock, toBlock]. May throw if the range is too wide for the provider. */

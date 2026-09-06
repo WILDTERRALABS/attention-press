@@ -36,6 +36,8 @@ export interface CollectorMetrics {
   vouchersRejected: number;
   settleSent: number;
   settleFailed: number;
+  finalizeSent: number;
+  finalizeFailed: number;
 }
 
 /**
@@ -58,6 +60,8 @@ export class VoucherStore {
     vouchersRejected: 0,
     settleSent: 0,
     settleFailed: 0,
+    finalizeSent: 0,
+    finalizeFailed: 0,
   };
   private readonly file: string | null;
 

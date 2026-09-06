@@ -105,6 +105,7 @@ export function registerRoutes(app: FastifyInstance, ctx: ServerContext): void {
             startTime: session.startTime.toString(),
             ratePerSec: session.ratePerSec.toString(),
             open: session.open,
+            closeInitiatedAt: session.closeInitiatedAt.toString(),
           }
         : null,
       latestVoucher: latest

@@ -100,19 +100,28 @@ Off-chain author bio (≤280 chars). `GET /profiles/:address` → `{ address, te
 ### `GET /health` · `GET /metrics`
 Wiring + liveness (`status`, `chainId`, `streamAddress`, `settler`,
 `blockTimestamp`; `status: "degraded"` if the RPC is unreachable) and counters
-(`vouchersReceived/Accepted/Rejected`, `settleSent/Failed`).
+(`vouchersReceived/Accepted/Rejected`, `settleSent/Failed`, `finalizeSent/Failed`).
 
 ## How settlement works
 
 Every `SETTLE_INTERVAL_MS` the loop walks sessions whose stored voucher is ahead
-of the on-chain `claimed`. For each it re-reads the session and then:
+of the on-chain `claimed`. For each it re-reads the session (and its
+`closeInitiatedAt`) and then:
 
 - session gone → stop tracking
-- session closed → record final `claimed`, stop tracking
+- session `open == false` (already finalized) → record final `claimed`, stop tracking
 - `voucher ≤ claimed` (settled elsewhere) → catch up local state, skip
 - delta `< MIN_SETTLE_DELTA` → skip this round
 - otherwise → `settle(sessionId, cumulativeAmount, signature)`; on revert, count
   it failed and leave it pending for the next tick
+
+**Two-phase closure.** `AttentionStream.closeSession(id)` only freezes accrual and
+starts a `challengeWindow`; it does not refund. The loop keeps `settle`-ing a
+session in its window (capped at the close timestamp on-chain), and once
+`closeInitiatedAt + challengeWindow` has elapsed it calls `finalizeSession(id)`
+so the reader is refunded without having to return. `finalizeSession` is
+permissionless, so a reader or a keeper can also do it; the collector just makes
+it automatic.
 
 ## How the reply index works
 

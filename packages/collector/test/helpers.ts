@@ -41,6 +41,7 @@ export function makeSession(over: Partial<OnChainSession> = {}): OnChainSession 
     startTime: 1_000n,
     ratePerSec: 1_000n,
     open: true,
+    closeInitiatedAt: 0n,
     ...over,
   };
 }
@@ -71,6 +72,9 @@ export class FakeChain implements ChainAdapter {
   settleCalls: Array<{ id: Hex; amount: bigint; sig: Hex }> = [];
   settleError: Error | null = null;
   blockError: Error | null = null;
+  challengeWindowSec = 900n;
+  finalizeCalls: Hex[] = [];
+  finalizeError: Error | null = null;
 
   // --- reply indexer fakes ---
   head = 1_000n;
@@ -100,6 +104,18 @@ export class FakeChain implements ChainAdapter {
     const s = this.sessions.get(id);
     if (s) s.claimed = amount;
     return ("0x" + "cc".repeat(32)) as Hex;
+  }
+
+  async finalizeSession(id: Hex): Promise<Hex> {
+    if (this.finalizeError) throw this.finalizeError;
+    this.finalizeCalls.push(id);
+    const s = this.sessions.get(id);
+    if (s) s.open = false;
+    return ("0x" + "ff".repeat(32)) as Hex;
+  }
+
+  async getChallengeWindow(): Promise<bigint> {
+    return this.challengeWindowSec;
   }
 
   async latestBlockNumber(): Promise<bigint> {
