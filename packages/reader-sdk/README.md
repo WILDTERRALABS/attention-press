@@ -46,12 +46,15 @@ meter.on("session:started", ({ sessionId }) => console.log("reading", sessionId)
 meter.on("voucher:signed", ({ cumulativeAmount }) => updateSpendMeter(cumulativeAmount));
 meter.on("session:paused", ({ reason }) => console.log("paused:", reason));
 meter.on("session:resumed", () => console.log("resumed"));
-meter.on("session:ended", ({ finalCumulative, txHash }) => console.log("done", finalCumulative, txHash));
+meter.on("session:ended", ({ finalCumulative }) => console.log("closing", finalCumulative));
+meter.on("session:finalized", ({ refunded }) => console.log("refunded", refunded));
 meter.on("error", ({ phase, error }) => console.warn(phase, error));
 
 await meter.start();                        // approves token if needed, sends openSession
 // … reader reads …
-await meter.stop();                         // final voucher + closeSession + refund
+await meter.stop();                         // final voucher + closeSession (phase 1, no refund)
+// … wait challengeWindow (read `challengeWindow()` from the contract) …
+await meter.finalize();                     // phase 2: refunds budget - claimed to the reader
 ```
 
 ## How it maps to `AttentionStream.sol`
@@ -60,7 +63,8 @@ await meter.stop();                         // final voucher + closeSession + re
 | --- | --- |
 | `meter.start()` | ERC-20 `approve` **only if allowance < budget** → `openSession(articleId, budget, ratePerSec, sessionKey.address)`; `sessionId` read from the `SessionOpened` event. (The `@attention-press/web` app pre-approves a standing allowance, so the approve step is normally skipped.) Pass `skipApproval: true` if the host handles approval itself. |
 | voucher every `voucherIntervalMs` | EIP-712 `Voucher(bytes32 sessionId, uint256 cumulativeAmount)` signed by the ephemeral key, under domain `("AttentionStream", "1", chainId, contractAddress)` — the author's collector submits it to `settle` |
-| `meter.stop()` | `closeSession(sessionId, latestCumulative, latestSig)` from the reader's wallet; unspent budget refunded |
+| `meter.stop()` | signs + delivers the final voucher, then `closeSession(sessionId)` � **phase 1**: records the accrual cutoff, no refund |
+| `meter.finalize()` | `finalizeSession(sessionId)` after `closeInitiatedAt + challengeWindow` � **phase 2**: refunds `budget - claimed` to the reader (permissionless on-chain; the author's collector may call it too) |
 
 `cumulativeAmount` is computed as `ratePerSec × engagedSeconds`, floored to whole
 seconds (matching on-chain integer math) and clamped to `budget` and to
@@ -92,7 +96,8 @@ emits `session:resumed`. Engaged time is measured with a monotonic clock
   persisted, and dropped on `stop()`. A page reload loses it — by design.
 - Its blast radius is bounded on-chain: it can authorize at most `budget`, and
   no faster than `ratePerSec`. If a reload orphans a session, the reader recovers
-  the remainder with `closeSession` or, after the contract timeout, `readerReclaim`.
+  the full unspent budget with `closeSession` then `finalizeSession` after the
+  challenge window � no voucher needed.
 - Vouchers must reach the author's collector in real time (`onVoucher`). The
   author calls `settle` to ratchet `claimed` up; the reader can never close below
   what has been settled. The one unsettled increment (≤ one voucher interval) is
@@ -109,7 +114,7 @@ emits `session:resumed`. Engaged time is measured with a monotonic clock
 
 Lower-level exports are available too: `EngagementTracker`, `IdleDetector`,
 `SessionKey`, `computeCumulative`, `buildTypedData` / `VOUCHER_TYPES`,
-`openSession` / `closeSession`, `attentionStreamAbi`.
+`openSession` / `closeSession` / `finalizeSession`, `attentionStreamAbi`.
 
 ## Develop
 

@@ -13,22 +13,34 @@ export const attentionStreamAbi = [
     outputs: [{ name: "id", type: "bytes32" }],
   },
   {
+    // Phase 1 of two-phase closure: records the accrual cutoff, no refund.
     type: "function",
     name: "closeSession",
     stateMutability: "nonpayable",
-    inputs: [
-      { name: "id", type: "bytes32" },
-      { name: "cumulativeAmount", type: "uint96" },
-      { name: "sig", type: "bytes" },
-    ],
+    inputs: [{ name: "id", type: "bytes32" }],
+    outputs: [],
+  },
+  {
+    // Phase 2: permissionless after `closeInitiatedAt + challengeWindow`.
+    type: "function",
+    name: "finalizeSession",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "id", type: "bytes32" }],
     outputs: [],
   },
   {
     type: "function",
-    name: "readerReclaim",
-    stateMutability: "nonpayable",
-    inputs: [{ name: "id", type: "bytes32" }],
-    outputs: [],
+    name: "challengeWindow",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint64" }],
+  },
+  {
+    type: "function",
+    name: "closeInitiatedAt",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "bytes32" }],
+    outputs: [{ name: "", type: "uint64" }],
   },
   {
     type: "function",
@@ -48,6 +60,26 @@ export const attentionStreamAbi = [
       { name: "signer", type: "address", indexed: false },
       { name: "budget", type: "uint96", indexed: false },
       { name: "ratePerSec", type: "uint64", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "SessionClosing",
+    inputs: [
+      { name: "id", type: "bytes32", indexed: true },
+      { name: "articleId", type: "uint256", indexed: true },
+      { name: "initiatedAt", type: "uint64", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "SessionClosed",
+    inputs: [
+      { name: "id", type: "bytes32", indexed: true },
+      { name: "articleId", type: "uint256", indexed: true },
+      { name: "totalPaid", type: "uint96", indexed: false },
+      { name: "refunded", type: "uint96", indexed: false },
+      { name: "duration", type: "uint64", indexed: false },
     ],
   },
 ] as const;

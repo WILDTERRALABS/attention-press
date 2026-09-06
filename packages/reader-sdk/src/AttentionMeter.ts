@@ -5,6 +5,11 @@ import { SessionKey } from "./session/SessionKey.js";
 import { computeCumulative, isBudgetExhausted } from "./session/accrual.js";
 import { openSession as defaultOpenSession, type OpenSessionFn } from "./chain/openSession.js";
 import { closeSession as defaultCloseSession, type CloseSessionFn } from "./chain/closeSession.js";
+import {
+  finalizeSession as defaultFinalizeSession,
+  type FinalizeSessionFn,
+  type FinalizeSessionResult,
+} from "./chain/finalizeSession.js";
 import type { AttentionMeterConfig, EndReason, MeterEventMap, MeterState, VoucherRecord } from "./types.js";
 
 const DEFAULTS = {
@@ -20,6 +25,7 @@ const UINT96_MAX = (1n << 96n) - 1n;
 export interface AttentionMeterDeps {
   openSession?: OpenSessionFn;
   closeSession?: CloseSessionFn;
+  finalizeSession?: FinalizeSessionFn;
 }
 
 /**
@@ -38,6 +44,8 @@ export class AttentionMeter extends TypedEmitter<MeterEventMap> {
   };
   private readonly openSessionImpl: OpenSessionFn;
   private readonly closeSessionImpl: CloseSessionFn;
+  private readonly finalizeSessionImpl: FinalizeSessionFn;
+  private finalizeResult: FinalizeSessionResult | null = null;
 
   private state: MeterState = "idle";
   private tracker: EngagementTracker | null = null;
@@ -65,6 +73,7 @@ export class AttentionMeter extends TypedEmitter<MeterEventMap> {
     };
     this.openSessionImpl = deps.openSession ?? defaultOpenSession;
     this.closeSessionImpl = deps.closeSession ?? defaultCloseSession;
+    this.finalizeSessionImpl = deps.finalizeSession ?? defaultFinalizeSession;
   }
 
   getState(): MeterState {
@@ -176,7 +185,11 @@ export class AttentionMeter extends TypedEmitter<MeterEventMap> {
     this.tracker.setManualPaused(false);
   }
 
-  /** Stop tracking, sign a final voucher for any uncounted time, and close on-chain. */
+  /**
+   * Stop tracking, sign + deliver a final voucher for any uncounted time, and
+   * send phase-1 `closeSession` on-chain. Does NOT refund — call {@link finalize}
+   * after the challenge window (or let the author's collector do it).
+   */
   async stop(reason: EndReason = "manual"): Promise<void> {
     if (this.state === "idle" || this.state === "ended" || this.state === "stopping") return;
     this.state = "stopping";
@@ -190,6 +203,8 @@ export class AttentionMeter extends TypedEmitter<MeterEventMap> {
       this.unloadHandler = null;
     }
 
+    // Sign + deliver the final voucher so the collector can settle it during the
+    // challenge window (closeSession no longer settles anything itself).
     await this.maybeSignVoucher();
     this.tracker?.stop();
 
@@ -206,11 +221,10 @@ export class AttentionMeter extends TypedEmitter<MeterEventMap> {
         chainId: this.cfg.chainId,
         contractAddress: this.cfg.contractAddress,
         sessionId,
-        cumulativeAmount: this.lastVoucher?.cumulativeAmount ?? 0n,
-        signature: this.lastVoucher?.signature ?? ("0x" as Hex),
       });
     } catch (error) {
-      // Session stays open on-chain; the reader can retry or use readerReclaim later.
+      // Session stays open on-chain; the reader can retry closeSession, or anyone
+      // can force-close it after MAX_ACCRUAL_WINDOW.
       this.emit("error", { phase: "stop", error });
     }
 
@@ -223,6 +237,35 @@ export class AttentionMeter extends TypedEmitter<MeterEventMap> {
       engagedSeconds: this.tracker?.engagedSeconds ?? 0,
       txHash,
     });
+  }
+
+  /**
+   * Phase 2: refund `budget - claimed` to the reader and close the channel.
+   * Valid only after {@link stop}. Reverts cleanly if the challenge window is
+   * still open — poll `finalizeAvailableAt` from the `session:ended` payload.
+   * Idempotent: returns the cached result once finalized.
+   */
+  async finalize(): Promise<FinalizeSessionResult> {
+    if (this.state !== "ended") {
+      throw new Error(`finalize() is invalid in state "${this.state}" — call stop() first`);
+    }
+    if (!this.sessionId) throw new Error("finalize(): no session");
+    if (this.finalizeResult) return this.finalizeResult;
+
+    try {
+      const res = await this.finalizeSessionImpl({
+        provider: this.cfg.provider,
+        chainId: this.cfg.chainId,
+        contractAddress: this.cfg.contractAddress,
+        sessionId: this.sessionId,
+      });
+      this.finalizeResult = res;
+      this.emit("session:finalized", { sessionId: this.sessionId, txHash: res.txHash, refunded: res.refunded });
+      return res;
+    } catch (error) {
+      this.emit("error", { phase: "finalize", error });
+      throw error;
+    }
   }
 
   private async maybeSignVoucher(): Promise<void> {

@@ -11,8 +11,8 @@ export interface Eip1193Provider {
  * Where the ephemeral session key is kept.
  * v0.1 supports `"memory"` only — the key never touches disk and is dropped on
  * `stop()` / page unload. A reload therefore ends the session's ability to sign
- * new vouchers; the reader recovers any unspent budget on-chain via
- * `closeSession` / `readerReclaim`.
+ * new vouchers; the reader recovers any unspent budget on-chain with no voucher
+ * via `closeSession` then `finalizeSession` after the challenge window.
  */
 export type SessionKeyStorage = "memory";
 
@@ -89,14 +89,23 @@ export type MeterEventMap = {
   "voucher:signed": VoucherRecord;
   "session:paused": { reason: PauseReason; at: number; engagedSeconds: number };
   "session:resumed": { at: number; engagedSeconds: number };
+  /**
+   * Phase 1 done: the final voucher was signed/delivered and `closeSession` was
+   * sent. The refund is NOT here — call `meter.finalize()` after the on-chain
+   * `challengeWindow` (read `challengeWindow()` from the contract for the exact
+   * duration); `finalize()` reverts cleanly if called too early.
+   */
   "session:ended": {
     sessionId: Hex;
     reason: EndReason;
     finalCumulative: bigint;
     engagedSeconds: number;
+    /** `closeSession` tx hash (undefined if it failed — see the `error` event). */
     txHash?: Hex;
   };
-  error: { phase: "start" | "voucher" | "deliver" | "stop"; error: unknown };
+  /** Phase 2 done: reader refunded, channel closed on-chain. */
+  "session:finalized": { sessionId: Hex; txHash: Hex; refunded: bigint };
+  error: { phase: "start" | "voucher" | "deliver" | "stop" | "finalize"; error: unknown };
 };
 
 export type MeterEventName = keyof MeterEventMap;

@@ -4,6 +4,7 @@ import { AttentionMeter } from "../src/AttentionMeter.js";
 import type { AttentionMeterConfig, MeterEventMap } from "../src/types.js";
 import type { OpenSessionFn } from "../src/chain/openSession.js";
 import type { CloseSessionFn } from "../src/chain/closeSession.js";
+import type { FinalizeSessionFn } from "../src/chain/finalizeSession.js";
 
 const RATE = 1_000_000_000_000n;
 const SESSION_ID = ("0x" + "cd".repeat(32)) as Hex;
@@ -16,9 +17,13 @@ function setVisibility(state: "visible" | "hidden"): void {
   document.dispatchEvent(new Event("visibilitychange"));
 }
 
-function harness(configOverrides: Partial<AttentionMeterConfig> = {}, opts: { closeFn?: CloseSessionFn } = {}) {
+function harness(
+  configOverrides: Partial<AttentionMeterConfig> = {},
+  opts: { closeFn?: CloseSessionFn; finalizeFn?: FinalizeSessionFn } = {},
+) {
   const openCalls: unknown[] = [];
-  const closeCalls: unknown[] = [];
+  const closeCalls: Array<{ sessionId: Hex }> = [];
+  const finalizeCalls: Array<{ sessionId: Hex }> = [];
 
   const openSession: OpenSessionFn = async (p) => {
     openCalls.push(p);
@@ -27,8 +32,14 @@ function harness(configOverrides: Partial<AttentionMeterConfig> = {}, opts: { cl
   const closeSession: CloseSessionFn =
     opts.closeFn ??
     (async (p) => {
-      closeCalls.push(p);
+      closeCalls.push({ sessionId: p.sessionId });
       return "0xclose" as Hex;
+    });
+  const finalizeSession: FinalizeSessionFn =
+    opts.finalizeFn ??
+    (async (p) => {
+      finalizeCalls.push({ sessionId: p.sessionId });
+      return { txHash: "0xfinal" as Hex, refunded: 42n };
     });
 
   const events: Array<{ name: keyof MeterEventMap; payload: unknown }> = [];
@@ -44,7 +55,7 @@ function harness(configOverrides: Partial<AttentionMeterConfig> = {}, opts: { cl
       idleTimeoutMs: 30_000,
       ...configOverrides,
     },
-    { openSession, closeSession },
+    { openSession, closeSession, finalizeSession },
   );
 
   for (const name of [
@@ -53,12 +64,13 @@ function harness(configOverrides: Partial<AttentionMeterConfig> = {}, opts: { cl
     "session:paused",
     "session:resumed",
     "session:ended",
+    "session:finalized",
     "error",
   ] as const) {
     meter.on(name, (payload) => events.push({ name, payload }));
   }
 
-  return { meter, events, openCalls, closeCalls };
+  return { meter, events, openCalls, closeCalls, finalizeCalls };
 }
 
 const pick = (events: Array<{ name: keyof MeterEventMap; payload: unknown }>, name: keyof MeterEventMap) =>
@@ -135,7 +147,7 @@ describe("AttentionMeter lifecycle", () => {
     await meter.stop();
   });
 
-  it("ends with reason budget-exhausted and closes on-chain once the cap is hit", async () => {
+  it("ends with reason budget-exhausted and sends phase-1 closeSession once the cap is hit", async () => {
     const { meter, events, closeCalls } = harness({ budget: 3n * RATE, voucherIntervalMs: 1_000 });
     await meter.start();
 
@@ -146,24 +158,68 @@ describe("AttentionMeter lifecycle", () => {
     expect(ended[0]!.reason).toBe("budget-exhausted");
     expect(ended[0]!.finalCumulative).toBe(3n * RATE);
     expect(ended[0]!.txHash).toBe("0xclose");
-    expect(closeCalls).toHaveLength(1);
-    expect((closeCalls[0] as { cumulativeAmount: bigint }).cumulativeAmount).toBe(3n * RATE);
+    expect(closeCalls).toEqual([{ sessionId: SESSION_ID }]);
     expect(meter.getState()).toBe("ended");
   });
 
-  it("stop() signs a final voucher, closes, and blocks restart", async () => {
-    const { meter, events, closeCalls } = harness();
+  it("stop() signs+delivers a final voucher, sends closeSession, and blocks restart", async () => {
+    const delivered: bigint[] = [];
+    const { meter, events, closeCalls } = harness({ onVoucher: (v) => void delivered.push(v.cumulativeAmount) });
     await meter.start();
     await vi.advanceTimersByTimeAsync(3_200); // 3 engaged seconds, no interval voucher yet
 
     await meter.stop();
 
-    const ended = pick(events, "session:ended") as Array<{ reason: string; txHash?: Hex }>;
+    const ended = pick(events, "session:ended") as Array<{ reason: string; txHash?: Hex; finalCumulative: bigint }>;
     expect(ended[0]!.reason).toBe("manual");
     expect(ended[0]!.txHash).toBe("0xclose");
-    expect((closeCalls[0] as { cumulativeAmount: bigint }).cumulativeAmount).toBe(3n * RATE);
+    expect(ended[0]!.finalCumulative).toBe(3n * RATE);
+    // the final voucher went to the collector, not into closeSession
+    expect(delivered).toEqual([3n * RATE]);
+    expect(closeCalls).toEqual([{ sessionId: SESSION_ID }]);
 
     await expect(meter.start()).rejects.toThrow(/invalid in state/);
+  });
+
+  it("finalize() runs phase 2 after stop(), emits session:finalized, and is idempotent", async () => {
+    const { meter, events, finalizeCalls } = harness();
+    await meter.start();
+    await vi.advanceTimersByTimeAsync(3_000);
+    await meter.stop();
+
+    const res1 = await meter.finalize();
+    const res2 = await meter.finalize(); // cached, no second call
+    expect(res1).toEqual({ txHash: "0xfinal", refunded: 42n });
+    expect(res2).toEqual(res1);
+    expect(finalizeCalls).toEqual([{ sessionId: SESSION_ID }]);
+
+    const fin = pick(events, "session:finalized") as Array<{ sessionId: Hex; txHash: Hex; refunded: bigint }>;
+    expect(fin).toEqual([{ sessionId: SESSION_ID, txHash: "0xfinal", refunded: 42n }]);
+  });
+
+  it("finalize() before stop() throws", async () => {
+    const { meter } = harness();
+    await meter.start();
+    await expect(meter.finalize()).rejects.toThrow(/invalid in state/);
+    await meter.stop();
+  });
+
+  it("finalize() surfaces a revert as an error event and rethrows", async () => {
+    const { meter, events } = harness(
+      {},
+      {
+        finalizeFn: async () => {
+          throw new Error("ChallengeWindowOpen");
+        },
+      },
+    );
+    await meter.start();
+    await vi.advanceTimersByTimeAsync(2_000);
+    await meter.stop();
+
+    await expect(meter.finalize()).rejects.toThrow(/ChallengeWindowOpen/);
+    const errs = pick(events, "error") as Array<{ phase: string }>;
+    expect(errs.some((e) => e.phase === "finalize")).toBe(true);
   });
 
   it("surfaces onVoucher delivery failures as error events without stopping", async () => {

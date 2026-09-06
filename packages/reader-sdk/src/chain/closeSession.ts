@@ -8,14 +8,14 @@ export interface CloseSessionParams {
   chainId: number;
   contractAddress: Address;
   sessionId: Hex;
-  /** Latest voucher total, or `0n` with `sig = "0x"` to settle nothing. */
-  cumulativeAmount: bigint;
-  signature: Hex;
 }
 
 export type CloseSessionFn = (params: CloseSessionParams) => Promise<Hex>;
 
-/** Send `closeSession` from the reader's wallet; refunds unspent budget on-chain. */
+/**
+ * Phase 1 of closing: records the on-chain accrual cutoff and starts the
+ * challenge window. Does NOT refund — call `finalizeSession` after the window.
+ */
 export const closeSession: CloseSessionFn = async (params) => {
   const { publicClient, walletClient } = makeClients(params.provider, params.chainId);
   const reader = await requireAccount(walletClient);
@@ -26,7 +26,7 @@ export const closeSession: CloseSessionFn = async (params) => {
     address: params.contractAddress,
     abi: attentionStreamAbi,
     functionName: "closeSession",
-    args: [params.sessionId, params.cumulativeAmount, params.signature],
+    args: [params.sessionId],
   });
   const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
   if (receipt.status === "reverted") {

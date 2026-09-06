@@ -20,6 +20,12 @@ export { IdleDetector } from "./engagement/idle.js";
 export { attentionStreamAbi, erc20Abi } from "./chain/abi.js";
 export { openSession, type OpenSessionParams, type OpenSessionResult, type OpenSessionFn } from "./chain/openSession.js";
 export { closeSession, type CloseSessionParams, type CloseSessionFn } from "./chain/closeSession.js";
+export {
+  finalizeSession,
+  type FinalizeSessionParams,
+  type FinalizeSessionResult,
+  type FinalizeSessionFn,
+} from "./chain/finalizeSession.js";
 
 export type {
   AttentionMeterConfig,
