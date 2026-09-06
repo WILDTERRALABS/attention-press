@@ -1,19 +1,20 @@
 {
   "network": "monadTestnet",
   "chainId": 10143,
-  "deployedAt": "2026-09-02T02:10:11.893Z",
+  "deployedAt": "2026-09-06T04:05:00.806Z",
   "deployer": "0x67dEf124555dDAABb406D4c79e65218F952f3668",
   "contracts": {
     "ArticleRegistry": "0x34C48D04c566131aEa6DBA8E2727423A55e38aaa",
-    "AttentionStream": "0xca364C7eC309c293216B43f6C069Ee9c5b6959cc",
+    "AttentionStream": "0x29f111C6eadbe298865b8bF814d5fdafDB47A0AA",
     "paymentToken": "0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541",
-    "ArticleActions": "0x04D91BC0bF42EF2bD639B565b5f53644930E80AC"
+    "ArticleActions": "0x42F229857be71a239393F0eE218aE2A0823FaCa5"
   },
   "paymentTokenIsMock": false,
   "protocolFeeBps": 250,
   "treasury": "0x67dEf124555dDAABb406D4c79e65218F952f3668",
   "actionFeeBps": 250,
   "actionsTreasury": "0x67dEf124555dDAABb406D4c79e65218F952f3668",
-  "actionsDeployedAt": "2026-09-02T08:45:35.376Z",
-  "actionsDeployBlock": 59017209
+  "actionsDeployedAt": "2026-09-06T04:05:12.548Z",
+  "actionsDeployBlock": 60077000,
+  "note": "AttentionStream two-phase closure + ArticleActions InvalidRecipient guard (Savant.chat audit fixes). Previous: AttentionStream 0xca364C7eC309c293216B43f6C069Ee9c5b6959cc, ArticleActions 0x04D91BC0bF42EF2bD639B565b5f53644930E80AC."
 }

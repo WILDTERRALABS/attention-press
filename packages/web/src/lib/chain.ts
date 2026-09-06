@@ -7,7 +7,7 @@ export const COLLECTOR_URL = process.env.NEXT_PUBLIC_COLLECTOR_URL ?? "http://lo
 export const ARTICLE_REGISTRY = (process.env.NEXT_PUBLIC_ARTICLE_REGISTRY ??
   "0x34C48D04c566131aEa6DBA8E2727423A55e38aaa") as Address;
 export const ATTENTION_STREAM = (process.env.NEXT_PUBLIC_ATTENTION_STREAM ??
-  "0xca364C7eC309c293216B43f6C069Ee9c5b6959cc") as Address;
+  "0x29f111C6eadbe298865b8bF814d5fdafDB47A0AA") as Address;
 
 /**
  * ArticleActions (like / dislike / favorite / reply / tip). Deployed separately
@@ -16,7 +16,7 @@ export const ATTENTION_STREAM = (process.env.NEXT_PUBLIC_ATTENTION_STREAM ??
  * "not configured" note and makes no calls.
  */
 export const ARTICLE_ACTIONS = (process.env.NEXT_PUBLIC_ARTICLE_ACTIONS ??
-  "0x04D91BC0bF42EF2bD639B565b5f53644930E80AC") as Address | "";
+  "0x42F229857be71a239393F0eE218aE2A0823FaCa5") as Address | "";
 
 /** Fixed action prices, mirrored from ArticleActions.sol (base units, 18 dp). */
 export const ACTION_PRICES = {

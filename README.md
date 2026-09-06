@@ -14,7 +14,7 @@ mechanism.
 > **Status:** testnet-only build for **Monad's Metropolis hackathon**, built with
 > AI pair-programming (see [Built with AI](#built-with-ai)). Contracts, reader
 > SDK, collector, and web frontend are all implemented and tested
-> (**37 · 30 · 74 · 24** = 165 passing), and the three contracts are deployed to
+> (**42 · 34 · 77 · 24** = 177 passing), and the three contracts are deployed to
 > Monad testnet and exercised end-to-end (smoke + live canary). **Not audited.
 > Not for real funds.** See [Known limitations](#known-limitations).
 
@@ -32,9 +32,12 @@ mechanism.
 4. **Settlement.** The **collector** submits the latest voucher on-chain,
    ratcheting the author's claimable balance up. `settle` is permissionless, so
    the author never depends on a single party's goodwill.
-5. **Close & refund.** On leave, `closeSession` settles the final voucher and
-   returns the unspent budget. If the collector vanishes, `readerReclaim` lets
-   the reader recover the remainder unilaterally after a timeout.
+5. **Two-phase close.** `closeSession(id)` only *freezes accrual* and starts a
+   15-minute `challengeWindow` — no refund yet. The collector settles the final
+   voucher during that window (capped at the close timestamp, so nothing signed
+   after close can help the reader). `finalizeSession(id)` — permissionless —
+   then refunds the unspent budget. A collector-less reader recovers with
+   `closeSession` → wait → `finalizeSession`, no voucher needed.
 
 **Why no anti-sybil machinery is needed:** the reader funds the stream. A
 publisher pointing a bot fleet at their own article is their own wallet paying
@@ -63,7 +66,7 @@ The core mechanism — settling a payment channel every few seconds for every op
 reading session — only makes sense on a chain where a `settle` transaction costs
 a rounding error and confirms in well under a second.
 
-- **~400 ms blocks, ~800 ms finality.** `openSession` / `settle` / `closeSession`
+- **~400 ms blocks, ~800 ms finality.** `openSession` / `settle` / `finalizeSession`
   feel synchronous: the reader watches the spend meter move and their refund land
   almost immediately, instead of staring at a pending spinner.
 - **Low, predictable gas.** Gas per `settle` is negligible next to the WMON being
@@ -98,8 +101,8 @@ Canonical source: [`packages/contracts/deployments/monadTestnet.json`](packages/
 | Contract | Address |
 |---|---|
 | `ArticleRegistry` | `0x34C48D04c566131aEa6DBA8E2727423A55e38aaa` |
-| `AttentionStream` | `0xca364C7eC309c293216B43f6C069Ee9c5b6959cc` |
-| `ArticleActions` | `0x04D91BC0bF42EF2bD639B565b5f53644930E80AC` (deploy block 59017209) |
+| `AttentionStream` | `0x29f111C6eadbe298865b8bF814d5fdafDB47A0AA` (two-phase closure) |
+| `ArticleActions` | `0x42F229857be71a239393F0eE218aE2A0823FaCa5` (deploy block ~60077000) |
 | WMON (payment token) | `0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541` |
 | treasury / deployer | `0x67dEf124555dDAABb406D4c79e65218F952f3668` |
 
@@ -113,7 +116,7 @@ explicitly in its `.env`.
 
 ```bash
 npm install       # workspace root
-npm test          # contracts 37 · reader-sdk 30 · collector 74 · web 24
+npm test          # contracts 42 · reader-sdk 34 · collector 77 · web 24
 npm run build     # hardhat compile + tsup + tsc + next build
 ```
 
@@ -213,9 +216,10 @@ and slots into the same endpoint.
 limiting on `POST /vouchers`; sequential one-at-a-time settlement; polling, not
 event subscriptions.
 
-**Payment channel is unidirectional.** The last un-settled voucher increment
-(≤ one ~5s interval) is the author's risk if the reader closes in the same
-block. Bounded by voucher cadence, not eliminated.
+**Payment channel is unidirectional**, but the close/settle race an external AI
+audit (Savant.chat) flagged is fixed: `closeSession` is two-phase, so the
+collector always has a `challengeWindow` (15 min) to settle the final voucher
+before `finalizeSession` refunds. See `packages/contracts/SECURITY.md`.
 
 **Attention detection is advisory.** Focus/scroll/idle tracking protects the
 *reader's* wallet; it is not a payout oracle and the author does not have to
@@ -259,8 +263,8 @@ is possible but costs the action fee per fake action.
 **On-chain guards (`AttentionStream`):** monotonic `cumulativeAmount`, budget
 cap (reader's hard limit), rate cap (`ratePerSec × (elapsed + 1s)`, elapsed
 clamped to `MAX_ACCRUAL_WINDOW` = 7d), `ReentrancyGuard` + checks-effects-
-interactions on every money path, `SafeERC20`, fee ≤ 10%, `sessionTimeout` ∈
-[1d, 30d], EIP-712 domain binds chainId + verifyingContract.
+interactions on every money path, `SafeERC20`, fee ≤ 10%, two-phase close with an owner-settable `challengeWindow`
+∈ [1 min, 1 day] (default 15 min), EIP-712 domain binds chainId + verifyingContract.
 
 **`ArticleActions`:** never custodies the token (every payment is a direct
 `transferFrom(payer → recipient)`); `nonReentrant` + `whenNotPaused` +
