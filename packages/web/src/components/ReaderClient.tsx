@@ -12,9 +12,11 @@ import { SpendMeter, type MeterSnapshot } from "@/components/SpendMeter";
 import {
   ATTENTION_STREAM,
   CHAIN_ID,
+  CHALLENGE_WINDOW_SEC,
   COLLECTOR_URL,
   MIN_ALLOWANCE_STREAM,
   STANDING_ALLOWANCE_STREAM,
+  attentionStreamAbi,
   erc20Abi,
   monadTestnet,
 } from "@/lib/chain";
@@ -73,6 +75,21 @@ export function ReaderClient({
   const [unlocked, setUnlocked] = useState(false);
   const [decrypted, setDecrypted] = useState<string | null>(null);
   const [unlockErr, setUnlockErr] = useState<string | null>(null);
+
+  // Two-phase close: after `stop()` the refund needs `finalizeSession` once the
+  // challenge window elapses (the collector usually does it; this is the fallback).
+  const [finalizeAt, setFinalizeAt] = useState<number | null>(null);
+  const [finalizeState, setFinalizeState] = useState<"idle" | "pending" | "done" | "error">("idle");
+  const [refunded, setRefunded] = useState<bigint | null>(null);
+  const [finalizeErr, setFinalizeErr] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  const challengeWindow = useReadContract({
+    address: ATTENTION_STREAM,
+    abi: attentionStreamAbi,
+    functionName: "challengeWindow",
+  });
+  const challengeWindowSec = Number(challengeWindow.data ?? BigInt(CHALLENGE_WINDOW_SEC));
 
   const preview = useMemo(() => previewText(meta), [meta]);
   const bodySource = isEncrypted ? decrypted : unlocked ? (meta.body ?? null) : null;
@@ -160,7 +177,13 @@ export function ReaderClient({
       setUnlocked(false);
       setDecrypted(null);
       setUnlockErr(null);
+      setFinalizeAt(Date.now() + challengeWindowSec * 1000);
+      setFinalizeState("idle");
       patch({ state: "ended", streamed: e.finalCumulative, engagedSeconds: e.engagedSeconds });
+    });
+    meter.on("session:finalized", (e) => {
+      setFinalizeState("done");
+      setRefunded(e.refunded);
     });
     meter.on("error", (e) =>
       patch({ error: `${e.phase}: ${e.error instanceof Error ? e.error.message : String(e.error)}` }),
@@ -175,7 +198,7 @@ export function ReaderClient({
     } finally {
       setStarting(false);
     }
-  }, [articleId, patch, ratePerSec, budget, unlockBody]);
+  }, [articleId, patch, ratePerSec, budget, unlockBody, challengeWindowSec]);
 
   const stop = useCallback(async () => {
     try {
@@ -184,6 +207,34 @@ export function ReaderClient({
       /* surfaced via the error event */
     }
   }, []);
+
+  const finalize = useCallback(async () => {
+    setFinalizeErr(null);
+    setFinalizeState("pending");
+    try {
+      await meterRef.current?.finalize();
+      // success → `session:finalized` sets state to "done"
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/SessionNotOpen/i.test(msg)) {
+        // the collector (or someone) already finalized it
+        setFinalizeState("done");
+      } else if (/ChallengeWindowOpen/i.test(msg)) {
+        setFinalizeState("idle");
+        setFinalizeErr("The challenge window is still open — try again shortly.");
+      } else {
+        setFinalizeState("error");
+        setFinalizeErr(msg);
+      }
+    }
+  }, []);
+
+  // 1s clock so the "refund unlocks in …" countdown ticks
+  useEffect(() => {
+    if (snap.state !== "ended" || finalizeState === "done") return;
+    const iv = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, [snap.state, finalizeState]);
 
   // Live-update engaged seconds between voucher events while reading.
   useEffect(() => {
@@ -317,6 +368,41 @@ export function ReaderClient({
         canStart={canStart}
         starting={starting}
       />
+
+      {snap.state === "ended" &&
+        (() => {
+          const refundAmt = budget > snap.streamed ? budget - snap.streamed : 0n;
+          const secsLeft = finalizeAt ? Math.max(0, Math.ceil((finalizeAt - nowMs) / 1000)) : 0;
+          const canFinalize = finalizeAt != null && nowMs >= finalizeAt && finalizeState !== "pending";
+          return (
+            <div className="approve-once">
+              {finalizeState === "done" ? (
+                <p className="approve-once-head">
+                  ✓ Session closed{" "}
+                  {refunded != null
+                    ? `— ${formatUnits(refunded, tokenDecimals)} ${tokenSymbol} refunded`
+                    : "and refunded"}
+                  .
+                </p>
+              ) : (
+                <>
+                  <p className="approve-once-head">Session closed — {formatUnits(refundAmt, tokenDecimals)} {tokenSymbol} to refund</p>
+                  <p className="muted">
+                    Closing is two-phase: the last voucher settles during a{" "}
+                    {Math.round(challengeWindowSec / 60)}-minute challenge window, then your unspent
+                    budget is refunded. The author&apos;s collector usually claims it for you — or do it
+                    yourself below.
+                    {secsLeft > 0 && ` Refund unlocks in ${Math.floor(secsLeft / 60)}m ${secsLeft % 60}s.`}
+                  </p>
+                  <button className="btn btn-primary" disabled={!canFinalize} onClick={finalize}>
+                    {finalizeState === "pending" ? "Claiming…" : "Claim refund now"}
+                  </button>
+                </>
+              )}
+              {finalizeErr && <p className="notice err">{finalizeErr}</p>}
+            </div>
+          );
+        })()}
 
       {/* Stable container so the engagement tracker keeps the same scroll target
           before and after unlock; children swap on session start/end. */}

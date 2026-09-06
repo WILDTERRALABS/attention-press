@@ -159,7 +159,25 @@ export const attentionStreamAbi = [
     inputs: [{ name: "", type: "uint256" }],
     outputs: [{ type: "uint32" }],
   },
+  { type: "function", name: "challengeWindow", stateMutability: "view", inputs: [], outputs: [{ type: "uint64" }] },
+  {
+    type: "function",
+    name: "closeInitiatedAt",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "bytes32" }],
+    outputs: [{ type: "uint64" }],
+  },
+  {
+    type: "function",
+    name: "finalizeSession",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "id", type: "bytes32" }],
+    outputs: [],
+  },
 ] as const;
+
+/** Fallback if the on-chain `challengeWindow()` read isn't in yet (contract default). */
+export const CHALLENGE_WINDOW_SEC = 15 * 60;
 
 export const articleActionsAbi = [
   ...(["likeCount", "dislikeCount", "favoriteCount", "replyCount", "totalTipped"] as const).map(

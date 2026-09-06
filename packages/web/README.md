@@ -21,6 +21,9 @@ Next.js frontend for attention-press.
   `session:ended`. Live **spend meter** for tokens streamed / engaged time /
   budget while reading. Vouchers POST to `NEXT_PUBLIC_COLLECTOR_URL`. Payment
   token is **WMON**; a one-click **Wrap MON** appears if your balance is short.
+  Closing is two-phase (`stop()` → challenge window → `finalize()`): after you
+  stop, a panel shows the pending refund with a countdown and a **Claim refund**
+  button (the author's collector usually finalizes it for you).
   Below the body, a **paid-actions bar** — like / dislike / favorite (one each
   per wallet), tip, and a reply composer — talking to `ArticleActions`. Replies
   render from the collector's index (`GET /articles/:id/replies`, chronological,
