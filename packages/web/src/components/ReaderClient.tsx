@@ -276,17 +276,50 @@ export function ReaderClient({
   const { writeContractAsync } = useWriteContract();
   const [wrapping, setWrapping] = useState(false);
 
+  // Read `sessions(id).open` on-chain. null = the read failed (RPC hiccup);
+  // callers then just proceed and let the revert path handle it.
+  const isSessionOpen = useCallback(
+    async (id: `0x${string}`): Promise<boolean | null> => {
+      if (!publicClient) return null;
+      try {
+        const raw = await publicClient.readContract({
+          address: ATTENTION_STREAM,
+          abi: attentionStreamAbi,
+          functionName: "sessions",
+          args: [id],
+        });
+        const obj = raw as { open?: boolean };
+        const arr = raw as readonly unknown[];
+        return Boolean(obj.open ?? arr[8]);
+      } catch {
+        return null;
+      }
+    },
+    [publicClient],
+  );
+
   const finalize = useCallback(async () => {
     setFinalizeErr(null);
     setFinalizeState("pending");
     try {
+      const id = snap.sessionId;
+      // The collector (or anyone) may have already finalized this session — its
+      // challenge-window finalize is permissionless. Sending finalizeSession
+      // against a closed session reverts SessionNotOpen, and some RPCs (QuickNode)
+      // don't surface the decoded error name for the catch below to match. Check
+      // first: if it's already closed, the refund is done — just resync.
+      if (id && (await isSessionOpen(id as `0x${string}`)) === false) {
+        setFinalizeState("done");
+        forgetSession();
+        void wmon.refetch();
+        return;
+      }
       if (meterRef.current) {
         await meterRef.current.finalize();
         // success → `session:finalized` sets state to "done"
         return;
       }
       // Resumed session: no meter, send finalizeSession straight from the wallet.
-      const id = snap.sessionId;
       if (!id) throw new Error("no session to finalize");
       const hash = await writeContractAsync({
         address: ATTENTION_STREAM,
@@ -312,9 +345,10 @@ export function ReaderClient({
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/SessionNotOpen/i.test(msg)) {
-        // the collector (or someone) already finalized it
+        // finalized between our check and our send (or the RPC did decode it)
         setFinalizeState("done");
         forgetSession();
+        void wmon.refetch();
       } else if (/ChallengeWindowOpen/i.test(msg)) {
         setFinalizeState("idle");
         setFinalizeErr("The challenge window is still open — try again shortly.");
@@ -323,7 +357,7 @@ export function ReaderClient({
         setFinalizeErr(msg);
       }
     }
-  }, [snap.sessionId, writeContractAsync, publicClient, forgetSession, wmon]);
+  }, [snap.sessionId, writeContractAsync, publicClient, forgetSession, wmon, isSessionOpen]);
 
   // Resumed a session that was never phase-1 closed — send `closeSession` now,
   // which starts the challenge-window countdown.
@@ -333,6 +367,15 @@ export function ReaderClient({
     setFinalizeErr(null);
     setClosing(true);
     try {
+      // Already finalized (collector, or a 7-day sweep)? Then closeSession would
+      // revert SessionNotOpen — the refund is already done, just resync.
+      if ((await isSessionOpen(id as `0x${string}`)) === false) {
+        setNeedsClose(false);
+        setFinalizeState("done");
+        forgetSession();
+        void wmon.refetch();
+        return;
+      }
       const hash = await writeContractAsync({
         address: ATTENTION_STREAM,
         abi: attentionStreamAbi,
@@ -348,13 +391,18 @@ export function ReaderClient({
       // Someone (or a 7-day abandoned-session sweep) may have closed it already.
       if (/AlreadyClosing/i.test(msg)) {
         setNeedsClose(false);
+      } else if (/SessionNotOpen/i.test(msg)) {
+        setNeedsClose(false);
+        setFinalizeState("done");
+        forgetSession();
+        void wmon.refetch();
       } else {
         setFinalizeErr(msg);
       }
     } finally {
       setClosing(false);
     }
-  }, [snap.sessionId, writeContractAsync, publicClient, challengeWindowSec]);
+  }, [snap.sessionId, writeContractAsync, publicClient, challengeWindowSec, forgetSession, wmon, isSessionOpen]);
 
   // Standing WMON allowance to AttentionStream — approve once, then openSession
   // is a single confirmation (the SDK skips its own approve when allowance ≥ budget).
