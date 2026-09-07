@@ -37,9 +37,9 @@ export const MAX_REPLY_BYTES = 1_000;
  * neither contract is upgradeable, and ArticleActions prices are constants.
  * Tune freely — these are the only knobs.
  */
-export const STANDING_ALLOWANCE_STREAM = 500_000000000000000000n; // 500 WMON — ~25 deep / 50 standard sessions
-export const MIN_ALLOWANCE_STREAM = 25_000000000000000000n; //     re-prompt below 25 WMON (~1 deep session)
-export const STANDING_ALLOWANCE_ACTIONS = 100_000000000000000000n; // 100 WMON — ~100 likes / 50 replies + tips
+export const STANDING_ALLOWANCE_STREAM = 10_000000000000000000n; // 10 WMON — ~1 deep / 2 standard sessions
+export const MIN_ALLOWANCE_STREAM = 5_000000000000000000n; //      re-prompt below 5 WMON (~1 standard session)
+export const STANDING_ALLOWANCE_ACTIONS = 10_000000000000000000n; // 10 WMON — ~10 likes / 5 replies + tips
 export const MIN_ALLOWANCE_ACTIONS = 5_000000000000000000n; //      re-prompt below 5 WMON
 
 /**
@@ -65,7 +65,7 @@ export const WMON = "0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541" as Address;
  * derived from it (see lib/rate.ts).
  *
  * Placeholder testnet economics — tune freely. Standard = 1 WMON/min, so a
- * 10-minute read costs 10 WMON and the spend meter moves visibly.
+ * full 5-minute session costs 5 WMON and the spend meter moves visibly.
  */
 export const RATE_TIERS = [
   { id: "casual", label: "Casual", perMinute: "0.4" },
@@ -76,8 +76,8 @@ export const RATE_TIERS = [
 export type RateTierId = (typeof RATE_TIERS)[number]["id"];
 export const DEFAULT_TIER_ID: RateTierId = "standard";
 
-/** Session budget = rate × this (a 10-minute hard cap on a single reading session). */
-export const SESSION_SECONDS_CAP = 600n;
+/** Session budget = rate × this (a 5-minute hard cap on a single reading session). */
+export const SESSION_SECONDS_CAP = 300n;
 
 export const monadTestnet = defineChain({
   id: CHAIN_ID,

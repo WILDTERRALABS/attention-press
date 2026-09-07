@@ -15,10 +15,14 @@ describe("rate tiers", () => {
     expect(ratePerSecFromPerMinute("2")).toBe(parseUnits("2", 18) / 60n);
   });
 
-  it("budgetFor is rate × the 10-minute session cap", () => {
+  it("budgetFor is rate × the 5-minute session cap", () => {
     const r = ratePerSecFromPerMinute("1");
     expect(budgetFor(r)).toBe(r * SESSION_SECONDS_CAP);
-    expect(SESSION_SECONDS_CAP).toBe(600n);
+    expect(SESSION_SECONDS_CAP).toBe(300n);
+    // Standard tier (1 WMON/min) → ~5 WMON to open a session (sub-wei truncation
+    // from the /60 in ratePerSecFromPerMinute).
+    expect(budgetFor(r)).toBeGreaterThan(parseUnits("4.999", 18));
+    expect(budgetFor(r)).toBeLessThanOrEqual(parseUnits("5", 18));
   });
 
   it("all tier rates are safely within uint64 and below their budget", () => {
