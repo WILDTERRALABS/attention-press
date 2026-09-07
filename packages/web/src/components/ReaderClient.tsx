@@ -4,6 +4,7 @@ import DOMPurify from "dompurify";
 import Link from "next/link";
 import { marked } from "marked";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { decodeEventLog } from "viem";
 import { useAccount, useBalance, usePublicClient, useReadContract, useSignMessage, useWriteContract } from "wagmi";
 import { AttentionMeter, type Eip1193Provider } from "@attention-press/reader-sdk";
 import { ApproveOnce } from "@/components/ApproveOnce";
@@ -83,6 +84,35 @@ export function ReaderClient({
   const [refunded, setRefunded] = useState<bigint | null>(null);
   const [finalizeErr, setFinalizeErr] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  // A session recovered from a previous page load (its in-memory meter is gone).
+  // `needsClose` = it's still fully open, so phase-1 `closeSession` runs first.
+  const [resumed, setResumed] = useState(false);
+  const [needsClose, setNeedsClose] = useState(false);
+  const [closing, setClosing] = useState(false);
+
+  const sessionStoreKey = useMemo(
+    () => (address ? `ap:sess:${articleId}:${address.toLowerCase()}` : null),
+    [address, articleId],
+  );
+  const rememberSession = useCallback(
+    (id: string) => {
+      if (!sessionStoreKey) return;
+      try {
+        localStorage.setItem(sessionStoreKey, id);
+      } catch {
+        /* private mode / storage disabled */
+      }
+    },
+    [sessionStoreKey],
+  );
+  const forgetSession = useCallback(() => {
+    if (!sessionStoreKey) return;
+    try {
+      localStorage.removeItem(sessionStoreKey);
+    } catch {
+      /* ignore */
+    }
+  }, [sessionStoreKey]);
 
   const challengeWindow = useReadContract({
     address: ATTENTION_STREAM,
@@ -165,6 +195,7 @@ export function ReaderClient({
 
     meter.on("session:started", (e) => {
       setUnlocked(true);
+      rememberSession(e.sessionId);
       patch({ state: "reading", sessionId: e.sessionId, txHash: e.txHash, error: null });
       void unlockBody(e.sessionId);
     });
@@ -184,6 +215,7 @@ export function ReaderClient({
     meter.on("session:finalized", (e) => {
       setFinalizeState("done");
       setRefunded(e.refunded);
+      forgetSession();
     });
     meter.on("error", (e) =>
       patch({ error: `${e.phase}: ${e.error instanceof Error ? e.error.message : String(e.error)}` }),
@@ -198,34 +230,13 @@ export function ReaderClient({
     } finally {
       setStarting(false);
     }
-  }, [articleId, patch, ratePerSec, budget, unlockBody, challengeWindowSec]);
+  }, [articleId, patch, ratePerSec, budget, unlockBody, challengeWindowSec, rememberSession, forgetSession]);
 
   const stop = useCallback(async () => {
     try {
       await meterRef.current?.stop("manual");
     } catch {
       /* surfaced via the error event */
-    }
-  }, []);
-
-  const finalize = useCallback(async () => {
-    setFinalizeErr(null);
-    setFinalizeState("pending");
-    try {
-      await meterRef.current?.finalize();
-      // success → `session:finalized` sets state to "done"
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/SessionNotOpen/i.test(msg)) {
-        // the collector (or someone) already finalized it
-        setFinalizeState("done");
-      } else if (/ChallengeWindowOpen/i.test(msg)) {
-        setFinalizeState("idle");
-        setFinalizeErr("The challenge window is still open — try again shortly.");
-      } else {
-        setFinalizeState("error");
-        setFinalizeErr(msg);
-      }
     }
   }, []);
 
@@ -264,6 +275,86 @@ export function ReaderClient({
   const mon = useBalance({ address, query: { enabled: !!address } });
   const { writeContractAsync } = useWriteContract();
   const [wrapping, setWrapping] = useState(false);
+
+  const finalize = useCallback(async () => {
+    setFinalizeErr(null);
+    setFinalizeState("pending");
+    try {
+      if (meterRef.current) {
+        await meterRef.current.finalize();
+        // success → `session:finalized` sets state to "done"
+        return;
+      }
+      // Resumed session: no meter, send finalizeSession straight from the wallet.
+      const id = snap.sessionId;
+      if (!id) throw new Error("no session to finalize");
+      const hash = await writeContractAsync({
+        address: ATTENTION_STREAM,
+        abi: attentionStreamAbi,
+        functionName: "finalizeSession",
+        args: [id as `0x${string}`],
+      });
+      const receipt = await publicClient?.waitForTransactionReceipt({ hash });
+      let amount: bigint | null = null;
+      for (const log of receipt?.logs ?? []) {
+        if (log.address.toLowerCase() !== ATTENTION_STREAM.toLowerCase()) continue;
+        try {
+          const d = decodeEventLog({ abi: attentionStreamAbi, data: log.data, topics: log.topics });
+          if (d.eventName === "SessionClosed") amount = (d.args as { refunded: bigint }).refunded;
+        } catch {
+          /* not the event we want */
+        }
+      }
+      setRefunded(amount);
+      setFinalizeState("done");
+      forgetSession();
+      void wmon.refetch();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/SessionNotOpen/i.test(msg)) {
+        // the collector (or someone) already finalized it
+        setFinalizeState("done");
+        forgetSession();
+      } else if (/ChallengeWindowOpen/i.test(msg)) {
+        setFinalizeState("idle");
+        setFinalizeErr("The challenge window is still open — try again shortly.");
+      } else {
+        setFinalizeState("error");
+        setFinalizeErr(msg);
+      }
+    }
+  }, [snap.sessionId, writeContractAsync, publicClient, forgetSession, wmon]);
+
+  // Resumed a session that was never phase-1 closed — send `closeSession` now,
+  // which starts the challenge-window countdown.
+  const closeNow = useCallback(async () => {
+    const id = snap.sessionId;
+    if (!id) return;
+    setFinalizeErr(null);
+    setClosing(true);
+    try {
+      const hash = await writeContractAsync({
+        address: ATTENTION_STREAM,
+        abi: attentionStreamAbi,
+        functionName: "closeSession",
+        args: [id as `0x${string}`],
+      });
+      await publicClient?.waitForTransactionReceipt({ hash });
+      setNeedsClose(false);
+      setFinalizeAt(Date.now() + challengeWindowSec * 1000);
+      setFinalizeState("idle");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Someone (or a 7-day abandoned-session sweep) may have closed it already.
+      if (/AlreadyClosing/i.test(msg)) {
+        setNeedsClose(false);
+      } else {
+        setFinalizeErr(msg);
+      }
+    } finally {
+      setClosing(false);
+    }
+  }, [snap.sessionId, writeContractAsync, publicClient, challengeWindowSec]);
 
   // Standing WMON allowance to AttentionStream — approve once, then openSession
   // is a single confirmation (the SDK skips its own approve when allowance ≥ budget).
@@ -306,6 +397,71 @@ export function ReaderClient({
   const allowanceForSession = (streamAllowance.data as bigint | undefined) ?? 0n;
   const allowanceOk = allowanceForSession >= budget;
   const canStart = onChain && enoughBalance && allowanceOk;
+
+  // On load, recover a session from a previous visit that was left open (the
+  // in-memory meter and its finalize panel don't survive a reload). Restores the
+  // two-phase close UI so the refund is still reachable without a raw chain call.
+  useEffect(() => {
+    if (!onChain || !address || !publicClient || !sessionStoreKey) return;
+    if (meterRef.current || snap.state !== "idle") return;
+
+    let stored: string | null = null;
+    try {
+      stored = localStorage.getItem(sessionStoreKey);
+    } catch {
+      return;
+    }
+    if (!stored || !/^0x[0-9a-fA-F]{64}$/.test(stored)) return;
+    const id = stored as `0x${string}`;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [raw, cAt] = await Promise.all([
+          publicClient.readContract({
+            address: ATTENTION_STREAM,
+            abi: attentionStreamAbi,
+            functionName: "sessions",
+            args: [id],
+          }),
+          publicClient.readContract({
+            address: ATTENTION_STREAM,
+            abi: attentionStreamAbi,
+            functionName: "closeInitiatedAt",
+            args: [id],
+          }),
+        ]);
+        if (cancelled) return;
+        // viem returns the struct getter as an object keyed by the ABI output names.
+        const arr = raw as readonly unknown[];
+        const obj = raw as { reader?: string; claimed?: bigint; open?: boolean };
+        const reader = String(obj.reader ?? arr[0] ?? "");
+        const claimed = (obj.claimed ?? (arr[4] as bigint) ?? 0n) as bigint;
+        const open = Boolean(obj.open ?? arr[8]);
+
+        if (!reader || reader === "0x0000000000000000000000000000000000000000") {
+          forgetSession();
+          return;
+        }
+        if (reader.toLowerCase() !== address.toLowerCase() || !open) {
+          // finalized, or belongs to a different wallet now — nothing to resume.
+          forgetSession();
+          return;
+        }
+        const closeAt = cAt as bigint;
+        setResumed(true);
+        setNeedsClose(closeAt === 0n);
+        setFinalizeAt(closeAt > 0n ? Number(closeAt) * 1000 + challengeWindowSec * 1000 : null);
+        setFinalizeState("idle");
+        setSnap((prev) => ({ ...prev, state: "ended", sessionId: id, streamed: claimed }));
+      } catch {
+        /* transient RPC error — try again on the next render that satisfies the guard */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [onChain, address, publicClient, sessionStoreKey, snap.state, challengeWindowSec, forgetSession]);
 
   return (
     <article>
@@ -373,7 +529,8 @@ export function ReaderClient({
         (() => {
           const refundAmt = budget > snap.streamed ? budget - snap.streamed : 0n;
           const secsLeft = finalizeAt ? Math.max(0, Math.ceil((finalizeAt - nowMs) / 1000)) : 0;
-          const canFinalize = finalizeAt != null && nowMs >= finalizeAt && finalizeState !== "pending";
+          const canFinalize =
+            !needsClose && finalizeAt != null && nowMs >= finalizeAt && finalizeState !== "pending";
           return (
             <div className="approve-once">
               {finalizeState === "done" ? (
@@ -384,9 +541,25 @@ export function ReaderClient({
                     : "and refunded"}
                   .
                 </p>
+              ) : needsClose ? (
+                <>
+                  <p className="approve-once-head">
+                    You left a reading session open — {formatUnits(refundAmt, tokenDecimals)} {tokenSymbol} to refund
+                  </p>
+                  <p className="muted">
+                    Close it to start the {Math.round(challengeWindowSec / 60)}-minute challenge window;
+                    your unspent budget is refunded after that.
+                  </p>
+                  <button className="btn btn-primary" disabled={closing} onClick={closeNow}>
+                    {closing ? "Closing…" : "Close session"}
+                  </button>
+                </>
               ) : (
                 <>
-                  <p className="approve-once-head">Session closed — {formatUnits(refundAmt, tokenDecimals)} {tokenSymbol} to refund</p>
+                  <p className="approve-once-head">
+                    {resumed ? "Session left open on a previous visit" : "Session closed"} —{" "}
+                    {formatUnits(refundAmt, tokenDecimals)} {tokenSymbol} to refund
+                  </p>
                   <p className="muted">
                     Closing is two-phase: the last voucher settles during a{" "}
                     {Math.round(challengeWindowSec / 60)}-minute challenge window, then your unspent

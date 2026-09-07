@@ -168,11 +168,50 @@ export const attentionStreamAbi = [
     outputs: [{ type: "uint64" }],
   },
   {
+    // Public getter for the `sessions` mapping — used to resume the two-phase
+    // close flow after a page reload (React state for a live session is gone).
+    type: "function",
+    name: "sessions",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "bytes32" }],
+    outputs: [
+      { name: "reader", type: "address" },
+      { name: "signer", type: "address" },
+      { name: "author", type: "address" },
+      { name: "budget", type: "uint96" },
+      { name: "claimed", type: "uint96" },
+      { name: "articleId", type: "uint64" },
+      { name: "startTime", type: "uint64" },
+      { name: "ratePerSec", type: "uint64" },
+      { name: "open", type: "bool" },
+    ],
+  },
+  {
+    // Phase 1 of the two-phase close. Normally the reader SDK sends this; the UI
+    // also sends it directly when resuming a still-open session after a reload.
+    type: "function",
+    name: "closeSession",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "id", type: "bytes32" }],
+    outputs: [],
+  },
+  {
     type: "function",
     name: "finalizeSession",
     stateMutability: "nonpayable",
     inputs: [{ name: "id", type: "bytes32" }],
     outputs: [],
+  },
+  {
+    type: "event",
+    name: "SessionClosed",
+    inputs: [
+      { name: "id", type: "bytes32", indexed: true },
+      { name: "articleId", type: "uint256", indexed: true },
+      { name: "totalPaid", type: "uint96", indexed: false },
+      { name: "refunded", type: "uint96", indexed: false },
+      { name: "duration", type: "uint64", indexed: false },
+    ],
   },
 ] as const;
 
