@@ -148,14 +148,17 @@ JSON snapshot on disk), so it needs a real host — not a serverless platform.
 Railway fits; Render works only on a paid tier (its free tier sleeps after 15
 min idle, which stops the loops); Fly.io works with a `fly.toml`.
 
-Repo-root [`railway.json`](../../railway.json) pins the build/start commands so
-the npm-workspace layout deploys cleanly:
+The service is configured in the Railway dashboard (no repo-root config file —
+Railway's Config-as-Code is deprecated, and the Nixpacks `npm ci` step it used
+to run fails with `EBUSY` on the `node_modules/.cache` mount in this
+npm-workspaces monorepo). Railway's Railpack builder auto-detects the workspace:
 
 - **New Project → Deploy from GitHub repo** → pick this repo. Leave the service
-  Root Directory at the repo root (the config file builds the one workspace).
-- Build: `npm ci && npm run build --workspace @attention-press/collector`.
-  Start: `npm run start --workspace @attention-press/collector` (npm runs it
+  Root Directory at the repo root; Railpack builds the one workspace.
+- Build: `npm run build --workspace=@attention-press/collector`.
+  Start: `npm run start --workspace=@attention-press/collector` (npm runs it
   with the cwd set to `packages/collector`, so `dist/index.js` resolves).
+  Railpack runs the dependency install itself.
 - Health check is `GET /health`; restart-on-failure is enabled.
 - **Watch Paths** (service settings): `packages/collector/**` — so a push that
   only touches the web app or contracts doesn't redeploy the collector.
