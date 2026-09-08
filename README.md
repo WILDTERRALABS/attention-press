@@ -87,8 +87,8 @@ npm workspaces. `npm install` at the root installs everything.
 
 | Package | What it is |
 |---|---|
-| **[`packages/contracts`](packages/contracts)** | Solidity 0.8.24 / Hardhat. `ArticleRegistry` (author + contentHash + metadata pointer), `AttentionStream` (per-session payment channel, escrow + EIP-712 vouchers + fee + timeouts), `ArticleActions` (like/dislike/favorite/reply/tip). OpenZeppelin 5.1, `SafeERC20` + `ReentrancyGuard` + `Pausable`. Slither + solhint clean. See [`SECURITY.md`](packages/contracts/SECURITY.md). |
-| **[`packages/reader-sdk`](packages/reader-sdk)** | `@attention-press/reader-sdk` — client library. `AttentionMeter` opens the session, tracks engagement (focus / scroll / idle / `visibilitychange`), signs a voucher every ~5s with an in-memory ephemeral key, closes the session on `stop()`. TypeScript, viem, tsup (ESM + CJS + d.ts). |
+| **[`packages/contracts`](packages/contracts)** | Solidity 0.8.24 / Hardhat. `ArticleRegistry` (author + contentHash + metadata pointer), `AttentionStream` (per-session payment channel, escrow + EIP-712 vouchers + fee + two-phase close), `ArticleActions` (like/dislike/favorite/reply/tip). OpenZeppelin 5.1, `SafeERC20` + `ReentrancyGuard` + `Pausable`. Slither + solhint clean. See [`SECURITY.md`](packages/contracts/SECURITY.md). |
+| **[`packages/reader-sdk`](packages/reader-sdk)** | `@attention-press/reader-sdk` — client library. `AttentionMeter` opens the session, tracks engagement (focus / scroll / idle / `visibilitychange`), signs a voucher every ~5s with an in-memory ephemeral key, and two-phase-closes it (`stop()` then `finalize()` after the challenge window). TypeScript, viem, tsup (ESM + CJS + d.ts). |
 | **[`packages/collector`](packages/collector)** | `@attention-press/collector` — author-side HTTP service (Fastify + viem). Ingests vouchers → validates them exactly as the contract would → auto-`settle`s on an interval. Also: custodies content-decryption keys, serves signed author bios + per-reader stats, and **indexes `ArticleActions.Replied` logs** (backfill + poll) behind `GET /articles/:id/replies`. |
 | **[`packages/web`](packages/web)** | `@attention-press/web` — Next.js 15 / wagmi frontend. Discovery (Articles ranked by real spend, Authors ranked by earnings), publish flow (3 rate tiers, client-side encryption), reader view (session-gated decryption + live spend meter + one-click **Wrap MON**), `/profile/[address]`, and a **paid-actions bar** with a one-time standing WMON allowance ("approve once, then react freely"). |
 
@@ -137,7 +137,7 @@ npm run build && npm start   # :8787   (or: npm run dev)
 | `RPC_URL`, `CHAIN_ID` | `10143`. Use a **dedicated endpoint** (QuickNode / Alchemy) — the public RPC rate-limits and caps `eth_getLogs` at 100 blocks. |
 | `ATTENTION_STREAM_ADDRESS`, `ARTICLE_REGISTRY_ADDRESS`, `ARTICLE_ACTIONS_ADDRESS` | the deployed addresses above |
 | `SETTLER_PRIVATE_KEY` | **dedicated gas-only wallet**, used by nothing else — the settle loop signs `settle` txs from it, and any other use races the nonce. `settle` is permissionless, so this key never holds fees. (The reply indexer only reads.) |
-| `ARTICLE_ACTIONS_FROM_BLOCK` | start block for the one-time reply backfill (`59015000` is safely before the deploy; idempotent) |
+| `ARTICLE_ACTIONS_FROM_BLOCK` | start block for the one-time reply backfill (`60077000` ≈ the deploy block; a bit earlier is fine, idempotent) |
 | `SETTLE_INTERVAL_MS`, `MIN_SETTLE_DELTA`, `REPLY_INDEX_INTERVAL_MS`, `LOG_QUERY_RANGE`, `DATA_DIR`, `MAX_ACCRUAL_WINDOW_SEC`, `ALLOWED_ORIGINS` | have working defaults; see `.env.example` |
 
 ### 2. Web — `packages/web`
@@ -174,13 +174,14 @@ actions + revert cases against the deployed contract with a throwaway wallet),
 
 ```bash
 npm test                              # all four packages
-npm test -w @attention-press/contracts   # 37 — registry, voucher settlement, caps,
-                                         #      timeout, self-farm, ArticleActions
+npm test -w @attention-press/contracts   # 42 — registry, voucher settlement, caps,
+                                         #      two-phase close, self-farm, ArticleActions
                                          #      (fees, dedup, SelfAction, reentrancy,
-                                         #      reply cap, atomicity), independence
-npm test -w @attention-press/reader-sdk  # 30 — voucher digest, accrual clamps,
+                                         #      reply cap, atomicity, InvalidRecipient),
+                                         #      independence
+npm test -w @attention-press/reader-sdk  # 34 — voucher digest, accrual clamps,
                                          #      engagement model, meter lifecycle
-npm test -w @attention-press/collector   # 74 — voucher validation, store snapshot,
+npm test -w @attention-press/collector   # 77 — voucher validation, store snapshot,
                                          #      settle loop, HTTP routes, reply indexer
                                          #      (backfill windows, idempotency, adaptive
                                          #      getLogs range, reorg buffer)
@@ -331,10 +332,10 @@ attention-press was built with **Claude Code** (Anthropic's agentic coding tool)
 as an AI pair-programmer. The architecture, the Solidity contracts, the reader
 SDK, the collector service, and the Next.js frontend were designed and written in
 collaboration with the AI agent across the build window. All contract code was
-reviewed, unit- and adversarially-tested (**165 tests** across the four
+reviewed, unit- and adversarially-tested (**177 tests** across the four
 packages), and run through Slither + solhint — see
 [`packages/contracts/SECURITY.md`](packages/contracts/SECURITY.md) for the
-honest security gap. Commits are co-authored `Claude Sonnet`.
+honest security gap. Commits are co-authored `Claude Sonnet 5`.
 
 ## License
 

@@ -70,7 +70,7 @@ deploying it cannot affect sessions or the streaming flow. `git diff` on
 | Sock-puppet inflation of like/favorite **counts** | Each fake action costs `actionFeeBps` of real WMON (the same defense `AttentionStream` uses for self-farming). `SelfAction` blocks the trivial same-address case. |
 | `pause()` is owner centralization (owner can freeze all interactions) | Standard emergency stop for a funds contract. **Mainnet requires `owner` = a timelocked multisig.** Testnet uses an EOA. |
 | `block.timestamp` in the reply record | Display-only; never gates logic. Slither does not flag it. |
-| `AttentionStream` uses `block.timestamp` for the accrual cap, `challengeWindow`, and the `MAX_ACCRUAL_WINDOW` abandoned-session threshold (Slither `timestamp`, 8 sites) | A validator can nudge `block.timestamp` by a few seconds at most. The challenge window is 15 min and the accrual window 7 days, so seconds of skew are economically irrelevant. Inherent to a pay-per-second channel. |
+| `AttentionStream` reads `block.timestamp` on every close/settle path: the per-second accrual cap (`_maxAccrued`, `_applySettlement`), the `challengeWindow` boundary (`settle`, `finalizeSession`), the `MAX_ACCRUAL_WINDOW` abandoned-session threshold (`closeSession`), and their view mirror (`claimableFor`). Slither's `timestamp` detector flags all of these — plus, as false positives, a couple of `== address(0)` checks in `authorOf` / `openSession`. The exact site list shifts as the code changes; the class does not. | A validator can nudge `block.timestamp` by a few seconds at most. The challenge window is 15 min and the accrual window 7 days, so seconds of skew are economically irrelevant. Inherent to a pay-per-second channel. |
 
 ## What was done
 
