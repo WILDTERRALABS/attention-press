@@ -14,6 +14,8 @@ export interface OpenSessionParams {
   signer: Address;
   paymentToken?: Address;
   skipApproval?: boolean;
+  /** Approve this much instead of exactly `budget` when a top-up is needed. */
+  approveAmount?: bigint;
 }
 
 export interface OpenSessionResult {
@@ -47,13 +49,18 @@ export const openSession: OpenSessionFn = async (params) => {
     })) as bigint;
 
     if (allowance < params.budget) {
+      // Top up to the caller's standing amount when given one (bigger than this
+      // session's own budget) so this fallback doesn't degrade into a fresh
+      // approve every session once the standing allowance runs low.
+      const approveAmount =
+        params.approveAmount && params.approveAmount > params.budget ? params.approveAmount : params.budget;
       const approveHash = await walletClient.writeContract({
         account: reader,
         chain: null,
         address: token,
         abi: erc20Abi,
         functionName: "approve",
-        args: [params.contractAddress, params.budget],
+        args: [params.contractAddress, approveAmount],
       });
       const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
       if (approveReceipt.status === "reverted") {

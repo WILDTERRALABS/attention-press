@@ -60,6 +60,11 @@ export function ArticleActions({
   const onChain = hydrated && isConnected && chainId === CHAIN_ID;
   const isAuthor = !!address && address.toLowerCase() === author.toLowerCase();
   const canAct = onChain && !isAuthor && !busy;
+  // Gate each button on its own price so the visible `<ApproveOnce>` panel above
+  // is the one place a WMON approve tx happens — clicking a button the current
+  // allowance can't cover surfaces the approve panel instead of silently
+  // sending a second (approve + action) popup pair.
+  const canAfford = useCallback((cost: bigint) => state.allowance >= cost, [state.allowance]);
 
   const fmt = useCallback(
     (v: bigint) => `${formatUnits(v, tokenDecimals)} ${tokenSymbol}`,
@@ -193,27 +198,39 @@ export function ArticleActions({
       <div className="action-row">
         <button
           className={`btn${state.mine.like ? " on" : ""}`}
-          disabled={!canAct || state.mine.like}
+          disabled={!canAct || state.mine.like || !canAfford(ACTION_PRICES.like)}
           onClick={() => run("like", { functionName: "like", args: [articleId] }, ACTION_PRICES.like)}
-          title={`${fmt(ACTION_PRICES.like)} to the author`}
+          title={
+            canAfford(ACTION_PRICES.like)
+              ? `${fmt(ACTION_PRICES.like)} to the author`
+              : `Approve above first — ${fmt(ACTION_PRICES.like)} needed`
+          }
         >
           {busy === "like" ? "…" : "👍"} Like · {state.counts.like.toString()}
         </button>
         <button
           className={`btn${state.mine.dislike ? " on" : ""}`}
-          disabled={!canAct || state.mine.dislike}
+          disabled={!canAct || state.mine.dislike || !canAfford(ACTION_PRICES.dislike)}
           onClick={() => run("dislike", { functionName: "dislike", args: [articleId] }, ACTION_PRICES.dislike)}
-          title={`${fmt(ACTION_PRICES.dislike)} to the treasury (not the author)`}
+          title={
+            canAfford(ACTION_PRICES.dislike)
+              ? `${fmt(ACTION_PRICES.dislike)} to the treasury (not the author)`
+              : `Approve above first — ${fmt(ACTION_PRICES.dislike)} needed`
+          }
         >
           {busy === "dislike" ? "…" : "👎"} Dislike · {state.counts.dislike.toString()}
         </button>
         <button
           className={`btn${state.mine.favorite ? " on" : ""}`}
-          disabled={!canAct || state.mine.favorite}
+          disabled={!canAct || state.mine.favorite || !canAfford(ACTION_PRICES.favorite)}
           onClick={() =>
             run("favorite", { functionName: "favorite", args: [articleId] }, ACTION_PRICES.favorite)
           }
-          title={`${fmt(ACTION_PRICES.favorite)} to the author`}
+          title={
+            canAfford(ACTION_PRICES.favorite)
+              ? `${fmt(ACTION_PRICES.favorite)} to the author`
+              : `Approve above first — ${fmt(ACTION_PRICES.favorite)} needed`
+          }
         >
           {busy === "favorite" ? "…" : "⭐"} Favorite · {state.counts.favorite.toString()}
         </button>
@@ -237,7 +254,8 @@ export function ArticleActions({
           <span className="muted">{tokenSymbol}</span>
           <button
             className="btn"
-            disabled={!canAct || tipCost === 0n}
+            disabled={!canAct || tipCost === 0n || !canAfford(tipCost)}
+            title={canAfford(tipCost) ? undefined : `Approve above first — ${fmt(tipCost)} needed`}
             onClick={() => run("tip", { functionName: "tip", args: [articleId, tipCost] }, tipCost)}
           >
             {busy === "tip" ? "Tipping…" : "Send tip"}
@@ -259,7 +277,10 @@ export function ArticleActions({
         />
         <button
           className="btn"
-          disabled={!canAct || replyBytes === 0 || replyBytes > MAX_REPLY_BYTES}
+          disabled={
+            !canAct || replyBytes === 0 || replyBytes > MAX_REPLY_BYTES || !canAfford(ACTION_PRICES.reply)
+          }
+          title={canAfford(ACTION_PRICES.reply) ? undefined : `Approve above first — ${fmt(ACTION_PRICES.reply)} needed`}
           onClick={() =>
             run("reply", { functionName: "reply", args: [articleId, replyText] }, ACTION_PRICES.reply)
           }

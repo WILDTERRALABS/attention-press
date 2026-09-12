@@ -5,7 +5,7 @@ import Link from "next/link";
 import { marked } from "marked";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { decodeEventLog } from "viem";
-import { useAccount, useBalance, usePublicClient, useReadContract, useSignMessage, useWriteContract } from "wagmi";
+import { useAccount, useBalance, usePublicClient, useReadContract, useWriteContract } from "wagmi";
 import { AttentionMeter, type Eip1193Provider } from "@attention-press/reader-sdk";
 import { ApproveOnce } from "@/components/ApproveOnce";
 import { ArticleActions } from "@/components/ArticleActions";
@@ -60,7 +60,6 @@ export function ReaderClient({
   const hydrated = useHydrated();
   const { address, isConnected, chainId } = useAccount();
   const publicClient = usePublicClient();
-  const { signMessageAsync } = useSignMessage();
   const bodyRef = useRef<HTMLDivElement>(null);
   const meterRef = useRef<AttentionMeter | null>(null);
 
@@ -133,17 +132,20 @@ export function ReaderClient({
 
   const unlockBody = useCallback(
     async (sessionId: string) => {
-      if (!isEncrypted || !meta.enc || !address) return;
+      if (!isEncrypted || !meta.enc) return;
       setUnlockErr(null);
       try {
         const ts = Math.floor(Date.now() / 60_000);
-        const signature = await signMessageAsync({
-          message: `attention-press: unlock article ${articleId} for ${address.toLowerCase()} at ${ts}`,
-        });
+        // Signed locally by the session's ephemeral key (same one that signs
+        // vouchers) — proves possession of this exact open session without a
+        // wallet popup. The collector verifies it against `sessions(id).signer`.
+        const message = `attention-press: unlock article ${articleId} for session ${sessionId.toLowerCase()} at ${ts}`;
+        const signature = await meterRef.current?.signWithSessionKey(message);
+        if (!signature) throw new Error("no active session to sign the unlock request");
         const res = await fetch(`${COLLECTOR_URL}/articles/${articleId}/key`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ address, sessionId, signature, timestamp: ts }),
+          body: JSON.stringify({ sessionId, signature, timestamp: ts }),
         });
         if (!res.ok) {
           throw new Error((await res.json().catch(() => ({}))).reason ?? `collector ${res.status}`);
@@ -158,7 +160,7 @@ export function ReaderClient({
         setUnlockErr(e instanceof Error ? e.message : String(e));
       }
     },
-    [isEncrypted, meta.enc, address, articleId, contentHash, signMessageAsync],
+    [isEncrypted, meta.enc, articleId, contentHash],
   );
 
   const start = useCallback(async () => {
@@ -178,6 +180,10 @@ export function ReaderClient({
       provider: provider as Eip1193Provider,
       target: bodyRef.current ?? undefined,
       voucherIntervalMs: 5000,
+      // If the SDK's own allowance check ever finds a shortfall, top up to the
+      // standing amount (not just this session's budget) so it doesn't degrade
+      // into a fresh approve popup every session once the allowance runs low.
+      standingApproval: STANDING_ALLOWANCE_STREAM,
       onVoucher: async (v) => {
         const res = await fetch(`${COLLECTOR_URL}/vouchers`, {
           method: "POST",

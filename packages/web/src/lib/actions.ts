@@ -3,7 +3,7 @@
 import { useCallback, useMemo } from "react";
 import type { Abi, Address } from "viem";
 import { usePublicClient, useReadContracts, useWriteContract } from "wagmi";
-import { ARTICLE_ACTIONS, articleActionsAbi, erc20Abi, WMON } from "./chain";
+import { ARTICLE_ACTIONS, STANDING_ALLOWANCE_ACTIONS, articleActionsAbi, erc20Abi, WMON } from "./chain";
 
 export type ActionKind = "like" | "dislike" | "favorite";
 
@@ -65,8 +65,11 @@ export function useArticleActions(articleId: bigint, account?: Address): Actions
 }
 
 /**
- * Approve exactly `amount` WMON to ArticleActions (only if the current allowance
- * is short) then send the action. Two calls at most, both awaited to receipt.
+ * Send the action, topping up the WMON allowance first if it's short. This is
+ * a fallback for the rare case the `<ApproveOnce>` standing allowance wasn't
+ * used or was revoked — it re-approves the full standing amount (not just this
+ * action's price), so it doesn't degrade into a fresh approve popup every time
+ * the allowance runs low. Two calls at most, both awaited to receipt.
  */
 export function useSendAction() {
   const { writeContractAsync } = useWriteContract();
@@ -80,11 +83,12 @@ export function useSendAction() {
     ) => {
       if (!ARTICLE_ACTIONS) throw new Error("ArticleActions address not configured");
       if (currentAllowance < cost) {
+        const approveAmount = STANDING_ALLOWANCE_ACTIONS > cost ? STANDING_ALLOWANCE_ACTIONS : cost;
         const approveHash = await writeContractAsync({
           address: WMON,
           abi: erc20Abi,
           functionName: "approve",
-          args: [spender, cost],
+          args: [spender, approveAmount],
         });
         await publicClient?.waitForTransactionReceipt({ hash: approveHash });
       }

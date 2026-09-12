@@ -53,6 +53,14 @@ export interface AttentionMeterConfig {
 
   /** Skip the ERC-20 allowance check/approval (host already approved). Default `false`. */
   skipApproval?: boolean;
+  /**
+   * If the token allowance needs a top-up before `openSession`, approve this
+   * amount instead of exactly `budget`. Pass the same standing amount the host
+   * app already grants via its own approve-once UI so this fallback — which
+   * should rarely fire — doesn't leave a wallet approving budget-sized dribbles
+   * every session. Defaults to `budget` (approve only what this session needs).
+   */
+  standingApproval?: bigint;
 }
 
 export interface VoucherRecord {

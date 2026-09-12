@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import type { Hex } from "viem";
+import { recoverMessageAddress, type Hex } from "viem";
 import { AttentionMeter } from "../src/AttentionMeter.js";
 import type { AttentionMeterConfig, MeterEventMap } from "../src/types.js";
 import type { OpenSessionFn } from "../src/chain/openSession.js";
@@ -98,6 +98,24 @@ describe("AttentionMeter lifecycle", () => {
     expect(meter.getState()).toBe("reading");
 
     await meter.stop();
+  });
+
+  it("signWithSessionKey signs locally with the session's registered signer", async () => {
+    const { meter, events } = harness();
+    await meter.start();
+
+    const started = pick(events, "session:started")[0] as { signer: `0x${string}` };
+    const message = `attention-press: unlock article 1 for session ${SESSION_ID} at 123`;
+    const signature = await meter.signWithSessionKey(message);
+    const recovered = await recoverMessageAddress({ message, signature });
+    expect(recovered.toLowerCase()).toBe(started.signer.toLowerCase());
+
+    await meter.stop();
+  });
+
+  it("signWithSessionKey throws when no session is active", async () => {
+    const { meter } = harness();
+    await expect(meter.signWithSessionKey("x")).rejects.toThrow(/no active session/);
   });
 
   it("signs an increasing voucher every interval while engaged and delivers it", async () => {

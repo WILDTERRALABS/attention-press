@@ -11,6 +11,7 @@ const state = {
   allowance: 10n ** 30n,
   receiptStatus: "reverted" as "reverted" | "success",
   logs: [] as unknown[],
+  writeCalls: [] as Array<{ functionName: string; args: readonly unknown[] }>,
 };
 
 vi.mock("../src/chain/client.js", () => ({
@@ -20,7 +21,12 @@ vi.mock("../src/chain/client.js", () => ({
         functionName === "token" ? "0x00000000000000000000000000000000000000BB" : state.allowance,
       waitForTransactionReceipt: async () => ({ status: state.receiptStatus, logs: state.logs }),
     },
-    walletClient: { writeContract: async () => "0xdeadbeef" as Hex },
+    walletClient: {
+      writeContract: async (call: { functionName: string; args: readonly unknown[] }) => {
+        state.writeCalls.push({ functionName: call.functionName, args: call.args });
+        return "0xdeadbeef" as Hex;
+      },
+    },
   }),
   requireAccount: async () => READER,
 }));
@@ -55,6 +61,7 @@ beforeEach(() => {
   state.allowance = 10n ** 30n;
   state.receiptStatus = "reverted";
   state.logs = [];
+  state.writeCalls = [];
 });
 
 describe("openSession receipt handling", () => {
@@ -84,5 +91,43 @@ describe("openSession receipt handling", () => {
     state.receiptStatus = "success";
     state.logs = [{ ...sessionOpenedLog(id), address: "0x9999999999999999999999999999999999999999" }];
     await expect(openSession(params)).rejects.toThrow(/SessionOpened event not found/);
+  });
+});
+
+describe("openSession approval top-up", () => {
+  it("approves exactly `budget` when no standing amount is given", async () => {
+    state.allowance = 0n;
+    state.receiptStatus = "success";
+    state.logs = [sessionOpenedLog(("0x" + "11".repeat(32)) as Hex)];
+    await openSession({ ...params, skipApproval: false });
+    const approveCall = state.writeCalls.find((c) => c.functionName === "approve");
+    expect(approveCall?.args[1]).toBe(params.budget);
+  });
+
+  it("tops up to `approveAmount` when it's bigger than this session's budget", async () => {
+    state.allowance = 0n;
+    state.receiptStatus = "success";
+    state.logs = [sessionOpenedLog(("0x" + "22".repeat(32)) as Hex)];
+    const standing = 10_000_000n;
+    await openSession({ ...params, skipApproval: false, approveAmount: standing });
+    const approveCall = state.writeCalls.find((c) => c.functionName === "approve");
+    expect(approveCall?.args[1]).toBe(standing);
+  });
+
+  it("never approves less than the session needs, even if approveAmount is smaller", async () => {
+    state.allowance = 0n;
+    state.receiptStatus = "success";
+    state.logs = [sessionOpenedLog(("0x" + "33".repeat(32)) as Hex)];
+    await openSession({ ...params, skipApproval: false, approveAmount: 1n });
+    const approveCall = state.writeCalls.find((c) => c.functionName === "approve");
+    expect(approveCall?.args[1]).toBe(params.budget);
+  });
+
+  it("skips the approve entirely when allowance already covers the budget", async () => {
+    state.allowance = params.budget;
+    state.receiptStatus = "success";
+    state.logs = [sessionOpenedLog(("0x" + "44".repeat(32)) as Hex)];
+    await openSession({ ...params, skipApproval: false, approveAmount: 10_000_000n });
+    expect(state.writeCalls.some((c) => c.functionName === "approve")).toBe(false);
   });
 });

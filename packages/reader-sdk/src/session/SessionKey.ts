@@ -44,6 +44,16 @@ export class SessionKey {
     });
   }
 
+  /**
+   * Plain EIP-191 personal-sign over an arbitrary string, e.g. to prove
+   * possession of this session's registered on-chain `signer` to a relying
+   * party (the collector's key-release endpoint) without a wallet popup.
+   */
+  async signMessage(message: string): Promise<Hex> {
+    if (this.privateKey === null) throw new Error("SessionKey has been destroyed");
+    return this.account.signMessage({ message });
+  }
+
   /** Irreversibly drop the key material. */
   destroy(): void {
     this.privateKey = null;

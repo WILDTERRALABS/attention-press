@@ -309,15 +309,17 @@ describe("encrypted-article keys", () => {
     return app.inject({ method: "POST", url: "/articles/key", payload: { contentHash, key: KEY, signature } });
   }
 
-  async function releaseKey(reader: ReturnType<typeof newAccount>, id: string, sessionId: string) {
-    const ts = Math.floor(Date.now() / 60_000);
-    const signature = await reader.signMessage!({
-      message: `attention-press: unlock article ${id} for ${reader.address.toLowerCase()} at ${ts}`,
+  // Signed by the session's registered ephemeral key (`sessions(id).signer`),
+  // not the reader's wallet — proof of possession, no wallet signature.
+  async function releaseKey(signer: ReturnType<typeof newAccount>, id: string, sessionId: string, tsOverride?: number) {
+    const ts = tsOverride ?? Math.floor(Date.now() / 60_000);
+    const signature = await signer.signMessage!({
+      message: `attention-press: unlock article ${id} for session ${sessionId.toLowerCase()} at ${ts}`,
     });
     return app.inject({
       method: "POST",
       url: `/articles/${id}/key`,
-      payload: { address: reader.address, sessionId, signature, timestamp: ts },
+      payload: { sessionId, signature, timestamp: ts },
     });
   }
 
@@ -326,80 +328,72 @@ describe("encrypted-article keys", () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it("releases the key to the session reader for the right article", async () => {
+  it("releases the key for the session's registered signer on the right article", async () => {
     const author = newAccount();
-    const reader = newAccount();
+    const signer = newAccount();
     await registerKey(author);
     chain.articles.set("7", { author: author.address, contentHash: CONTENT_HASH, retired: false });
-    chain.sessions.set(sid(), makeSession({ reader: reader.address, articleId: 7n, open: true }));
+    chain.sessions.set(sid(), makeSession({ signer: signer.address, articleId: 7n, open: true }));
 
-    const res = await releaseKey(reader, "7", sid());
+    const res = await releaseKey(signer, "7", sid());
     expect(res.statusCode).toBe(200);
     expect(res.json().key).toBe(KEY);
   });
 
   it("403s when the session is closed", async () => {
     const author = newAccount();
-    const reader = newAccount();
+    const signer = newAccount();
     await registerKey(author);
     chain.articles.set("7", { author: author.address, contentHash: CONTENT_HASH, retired: false });
-    chain.sessions.set(sid(), makeSession({ reader: reader.address, articleId: 7n, open: false }));
-    expect((await releaseKey(reader, "7", sid())).statusCode).toBe(403);
+    chain.sessions.set(sid(), makeSession({ signer: signer.address, articleId: 7n, open: false }));
+    expect((await releaseKey(signer, "7", sid())).statusCode).toBe(403);
   });
 
   it("403s when the session is for a different article", async () => {
     const author = newAccount();
-    const reader = newAccount();
+    const signer = newAccount();
     await registerKey(author);
     chain.articles.set("7", { author: author.address, contentHash: CONTENT_HASH, retired: false });
-    chain.sessions.set(sid(), makeSession({ reader: reader.address, articleId: 99n, open: true }));
-    expect((await releaseKey(reader, "7", sid())).statusCode).toBe(403);
+    chain.sessions.set(sid(), makeSession({ signer: signer.address, articleId: 99n, open: true }));
+    expect((await releaseKey(signer, "7", sid())).statusCode).toBe(403);
   });
 
-  it("403s when the caller is not the session reader", async () => {
+  it("401s when the signature isn't from the session's registered signer", async () => {
     const author = newAccount();
-    const reader = newAccount();
+    const signer = newAccount();
     const attacker = newAccount();
     await registerKey(author);
     chain.articles.set("7", { author: author.address, contentHash: CONTENT_HASH, retired: false });
-    chain.sessions.set(sid(), makeSession({ reader: reader.address, articleId: 7n, open: true }));
-    expect((await releaseKey(attacker, "7", sid())).statusCode).toBe(403);
+    chain.sessions.set(sid(), makeSession({ signer: signer.address, articleId: 7n, open: true }));
+    expect((await releaseKey(attacker, "7", sid())).statusCode).toBe(401);
   });
 
   it("409s when the registered key's author != the on-chain author", async () => {
     const notAuthor = newAccount();
     const realAuthor = newAccount();
-    const reader = newAccount();
+    const signer = newAccount();
     await registerKey(notAuthor); // squatter registered the key
     chain.articles.set("7", { author: realAuthor.address, contentHash: CONTENT_HASH, retired: false });
-    chain.sessions.set(sid(), makeSession({ reader: reader.address, articleId: 7n, open: true }));
-    expect((await releaseKey(reader, "7", sid())).statusCode).toBe(409);
+    chain.sessions.set(sid(), makeSession({ signer: signer.address, articleId: 7n, open: true }));
+    expect((await releaseKey(signer, "7", sid())).statusCode).toBe(409);
   });
 
   it("404s when no key was registered", async () => {
     const author = newAccount();
-    const reader = newAccount();
+    const signer = newAccount();
     chain.articles.set("7", { author: author.address, contentHash: CONTENT_HASH, retired: false });
-    chain.sessions.set(sid(), makeSession({ reader: reader.address, articleId: 7n, open: true }));
-    expect((await releaseKey(reader, "7", sid())).statusCode).toBe(404);
+    chain.sessions.set(sid(), makeSession({ signer: signer.address, articleId: 7n, open: true }));
+    expect((await releaseKey(signer, "7", sid())).statusCode).toBe(404);
   });
 
   it("401s on a stale timestamp", async () => {
     const author = newAccount();
-    const reader = newAccount();
+    const signer = newAccount();
     await registerKey(author);
     chain.articles.set("7", { author: author.address, contentHash: CONTENT_HASH, retired: false });
-    chain.sessions.set(sid(), makeSession({ reader: reader.address, articleId: 7n, open: true }));
+    chain.sessions.set(sid(), makeSession({ signer: signer.address, articleId: 7n, open: true }));
     const staleTs = Math.floor(Date.now() / 60_000) - 10;
-    const signature = await reader.signMessage!({
-      message: `attention-press: unlock article 7 for ${reader.address.toLowerCase()} at ${staleTs}`,
-    });
-    const res = await app.inject({
-      method: "POST",
-      url: "/articles/7/key",
-      payload: { address: reader.address, sessionId: sid(), signature, timestamp: staleTs },
-    });
-    expect(res.statusCode).toBe(401);
+    expect((await releaseKey(signer, "7", sid(), staleTs)).statusCode).toBe(401);
   });
 });
 

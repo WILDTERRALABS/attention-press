@@ -8,9 +8,14 @@ export function keyRegisterMessage(contentHash: Hex): string {
   return `attention-press: register key for ${contentHash.toLowerCase()}`;
 }
 
-/** Signed by the reader to release a key; binds article id, reader, and a minute-timestamp. */
-export function keyUnlockMessage(articleId: string, reader: Address, unixMinute: number): string {
-  return `attention-press: unlock article ${articleId} for ${reader.toLowerCase()} at ${unixMinute}`;
+/**
+ * Signed by the session's ephemeral key (not the reader's wallet) to release a
+ * key; binds article id, the specific open session, and a minute-timestamp.
+ * Verified against that session's on-chain `signer` — proof of possession of
+ * the same key that already signs vouchers, no wallet popup required.
+ */
+export function keyUnlockMessage(articleId: string, sessionId: Hex, unixMinute: number): string {
+  return `attention-press: unlock article ${articleId} for session ${sessionId.toLowerCase()} at ${unixMinute}`;
 }
 
 export async function recoverSigner(message: string, signature: Hex): Promise<Address | null> {

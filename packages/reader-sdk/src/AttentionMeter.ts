@@ -92,6 +92,19 @@ export class AttentionMeter extends TypedEmitter<MeterEventMap> {
     };
   }
 
+  /**
+   * Sign an arbitrary message with this session's ephemeral key (the same key
+   * that signs vouchers) — e.g. to prove session ownership to a relying party
+   * without a wallet popup. The signature recovers to the `signer` address
+   * registered on-chain for this session. Throws if no session is active.
+   */
+  async signWithSessionKey(message: string): Promise<Hex> {
+    if (!this.sessionKey || this.sessionKey.destroyed) {
+      throw new Error("signWithSessionKey(): no active session");
+    }
+    return this.sessionKey.signMessage(message);
+  }
+
   async start(): Promise<void> {
     if (this.state !== "idle") throw new Error(`start() is invalid in state "${this.state}"`);
     this.state = "starting";
@@ -108,6 +121,7 @@ export class AttentionMeter extends TypedEmitter<MeterEventMap> {
         signer: this.sessionKey.address,
         paymentToken: this.cfg.paymentToken,
         skipApproval: this.cfg.skipApproval,
+        approveAmount: this.cfg.standingApproval,
       });
 
       this.sessionId = sessionId;

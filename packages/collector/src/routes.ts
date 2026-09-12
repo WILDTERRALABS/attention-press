@@ -231,18 +231,18 @@ export function registerRoutes(app: FastifyInstance, ctx: ServerContext): void {
     return reply.code(200).send({ ok: true, contentHash });
   });
 
-  // Reader releases the key: prove an open session for THIS article.
+  // Reader releases the key: prove possession of THIS session's registered
+  // signer — the same ephemeral key that already signs vouchers. No wallet
+  // signature needed; the reader's browser session key signs locally.
   app.post<{ Params: { id: string } }>("/articles/:id/key", async (req, reply) => {
     const id = req.params.id;
     if (!/^\d+$/.test(id)) return reply.code(400).send({ ok: false, reason: "bad article id" });
 
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const address = String(body.address ?? "");
     const sessionId = String(body.sessionId ?? "");
     const signature = String(body.signature ?? "");
     const timestamp = Number(body.timestamp);
 
-    if (!isAddress(address)) return reply.code(400).send({ ok: false, reason: "bad address" });
     if (!BYTES32.test(sessionId)) return reply.code(400).send({ ok: false, reason: "bad session id" });
     if (!isHex(signature)) return reply.code(400).send({ ok: false, reason: "signature must be hex" });
 
@@ -250,19 +250,17 @@ export function registerRoutes(app: FastifyInstance, ctx: ServerContext): void {
     if (!Number.isInteger(timestamp) || Math.abs(nowMin - timestamp) > UNLOCK_MAX_AGE_MIN) {
       return reply.code(401).send({ ok: false, reason: "stale or missing timestamp" });
     }
-    const signer = await recoverSigner(keyUnlockMessage(id, address as Address, timestamp), signature as Hex);
-    if (!signer || signer.toLowerCase() !== address.toLowerCase()) {
-      return reply.code(401).send({ ok: false, reason: "signature does not match address" });
-    }
 
     const session = await ctx.chain.getSession(sessionId as Hex);
     if (!session) return reply.code(403).send({ ok: false, reason: "unknown session" });
     if (!session.open) return reply.code(403).send({ ok: false, reason: "session is closed" });
-    if (session.reader.toLowerCase() !== address.toLowerCase()) {
-      return reply.code(403).send({ ok: false, reason: "not the session reader" });
-    }
     if (session.articleId !== BigInt(id)) {
       return reply.code(403).send({ ok: false, reason: "session is for a different article" });
+    }
+
+    const signer = await recoverSigner(keyUnlockMessage(id, sessionId as Hex, timestamp), signature as Hex);
+    if (!signer || signer.toLowerCase() !== session.signer.toLowerCase()) {
+      return reply.code(401).send({ ok: false, reason: "signature does not match the session's registered signer" });
     }
 
     const article = await ctx.chain.getArticle(BigInt(id));
