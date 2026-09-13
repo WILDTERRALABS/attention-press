@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { useReadContract, useReadContracts } from "wagmi";
-import { ARTICLE_REGISTRY, ATTENTION_STREAM, articleRegistryAbi, attentionStreamAbi } from "./chain";
+import { ARTICLE_REGISTRY, ATTENTION_STREAM, HIDDEN_ARTICLE_IDS, articleRegistryAbi, attentionStreamAbi } from "./chain";
 import { decodeMetadataURI, type ArticleMetadata } from "./metadata";
 
 export interface ArticleView {
@@ -47,6 +47,8 @@ export function useArticles(): { articles: ArticleView[]; isLoading: boolean; re
     if (!batch.data) return [];
     const out: ArticleView[] = [];
     for (let i = 0; i < ids.length; i++) {
+      const id = ids[i]!;
+      if (HIDDEN_ARTICLE_IDS.has(id)) continue;
       const base = i * 5;
       const art = batch.data[base]?.result as
         | readonly [`0x${string}`, `0x${string}`, bigint, boolean]
@@ -54,7 +56,7 @@ export function useArticles(): { articles: ArticleView[]; isLoading: boolean; re
       if (!art) continue;
       const uri = (batch.data[base + 1]?.result as string) ?? "";
       out.push({
-        id: ids[i]!,
+        id,
         author: art[0],
         contentHash: art[1],
         createdAt: Number(art[2]),

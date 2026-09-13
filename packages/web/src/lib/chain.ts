@@ -47,7 +47,7 @@ export const MIN_ALLOWANCE_ACTIONS = 5_000000000000000000n; //      re-prompt be
  * explainer). Override with NEXT_PUBLIC_PINNED_ARTICLE_ID; 0 / unset => none.
  */
 export const PINNED_ARTICLE_ID = (() => {
-  const raw = process.env.NEXT_PUBLIC_PINNED_ARTICLE_ID ?? "8";
+  const raw = process.env.NEXT_PUBLIC_PINNED_ARTICLE_ID ?? "14";
   try {
     const v = BigInt(raw);
     return v > 0n ? v : null;
@@ -55,6 +55,22 @@ export const PINNED_ARTICLE_ID = (() => {
     return null;
   }
 })();
+
+/**
+ * Article ids excluded from every listing regardless of on-chain `retired`
+ * state — for ones whose author can never call `retire` again. #11's
+ * authorship was transferred to the ArticleActions contract address during an
+ * audit-fix canary; ArticleRegistry has no owner override, so it's stuck
+ * `retired == false` forever. Override with NEXT_PUBLIC_HIDDEN_ARTICLE_IDS
+ * (comma-separated); empty string => hide nothing.
+ */
+export const HIDDEN_ARTICLE_IDS: ReadonlySet<bigint> = new Set(
+  (process.env.NEXT_PUBLIC_HIDDEN_ARTICLE_IDS ?? "11")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => BigInt(s)),
+);
 
 /** Canonical Wrapped MON (WMON) on Monad testnet — the payment token. */
 export const WMON = "0xFb8bf4c1CC7a94c73D209a149eA2AbEa852BC541" as Address;
