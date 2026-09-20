@@ -45,4 +45,3 @@ yarn-error.log*
 skills-lock.json
 
 .vercel
-.env*
