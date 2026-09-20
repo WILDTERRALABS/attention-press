@@ -20,11 +20,11 @@
     "finalize-session:monad": "hardhat run scripts/finalize-session.ts --network monadTestnet"
   },
   "devDependencies": {
-    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@nomicfoundation/hardhat-toolbox": "^7.0.0",
     "@openzeppelin/contracts": "5.1.0",
     "@types/node": "^20.14.0",
     "dotenv": "^16.4.5",
-    "hardhat": "^2.22.10",
+    "hardhat": "^3.17.0",
     "solhint": "^6.2.4",
     "ts-node": "^10.9.2",
     "typescript": "^5.5.4"
